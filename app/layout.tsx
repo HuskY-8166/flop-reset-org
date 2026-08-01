@@ -27,7 +27,16 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+  <nav style={{ padding: '1rem 2rem', borderBottom: '1px solid #262626', display: 'flex', gap: '1.5rem', backgroundColor: '#111' }}>
+    <a href="/">Home</a>
+    <a href="/matches">Matches</a>
+    <a href="/teams">Teams</a>
+    <a href="/standings">Standings</a>
+    <a href="/rivalries">Rivalries</a>
+  </nav>
+  {children}
+</body>
     </html>
   );
 }

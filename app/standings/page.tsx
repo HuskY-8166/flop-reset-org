@@ -17,9 +17,9 @@ export default async function Standings() {
     let gamesWon = 0
     let gamesLost = 0
 
-    team.series?.forEach((s) => {
-      const gWon = s.matches?.filter((m) => m.flop_reset_score > m.opponent_score).length ?? 0
-      const gLost = (s.matches?.length ?? 0) - gWon
+    ;(team.series as any)?.forEach((s: any) => {
+      const gWon = (s.matches as any)?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
+      const gLost = ((s.matches as any)?.length ?? 0) - gWon
       gamesWon += gWon
       gamesLost += gLost
       if (gWon > gLost) seriesWon++

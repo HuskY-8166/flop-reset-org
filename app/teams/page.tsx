@@ -21,7 +21,7 @@ export default async function Teams() {
           <h2>{team.name} ({team.format})</h2>
           {team.captain && <p>Captain: {team.captain}</p>}
           <ul>
-            {team.players?.map((p, i) => (
+            {(team.players as any)?.map((p: any, i: number) => (
               <li key={i}><a href={`/players/${encodeURIComponent(p.name)}`}>{p.name}</a></li>
             ))}
           </ul>

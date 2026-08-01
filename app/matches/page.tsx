@@ -22,8 +22,8 @@ export default async function Matches() {
       <ul>
         {matches?.map((m) => (
           <li key={m.match_id} style={{ marginBottom: '1rem' }}>
-            <strong>{m.teams?.name} ({m.teams?.format})</strong> vs {m.opponent_name}
-            <br />
+             <strong>{(m.teams as any)?.name} ({(m.teams as any)?.format})</strong> vs {m.opponent_name}           
+                <br />
             {m.flop_reset_score} — {m.opponent_score} {m.is_forfeit && '(forfeit)'}
             <br />
             {m.match_date} {m.notes && `— ${m.notes}`}

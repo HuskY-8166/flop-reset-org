@@ -7,14 +7,14 @@ export default async function Rivalries() {
 
   const rivalries: Record<string, { wins: number; losses: number; games: number }> = {}
 
-  series?.forEach((s) => {
+  series?.forEach((s: any) => {
     const key = s.opponent_name
     if (!rivalries[key]) rivalries[key] = { wins: 0, losses: 0, games: 0 }
 
-    const gamesWon = s.matches?.filter((m) => m.flop_reset_score > m.opponent_score).length ?? 0
-    const gamesLost = (s.matches?.length ?? 0) - gamesWon
+    const gamesWon = (s.matches as any)?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
+    const gamesLost = ((s.matches as any)?.length ?? 0) - gamesWon
 
-    rivalries[key].games += s.matches?.length ?? 0
+    rivalries[key].games += (s.matches as any)?.length ?? 0
     if (gamesWon > gamesLost) rivalries[key].wins++
     else rivalries[key].losses++
   })

@@ -30,7 +30,7 @@ export default async function PlayerProfile({ params }: { params: Promise<{ name
     <main style={{ padding: '2rem' }}>
       <h1>{playerName}</h1>
       <p>
-        {playerRows?.map((p) => `${p.teams?.name} (${p.teams?.format})`).join(' / ')}
+        {playerRows?.map((p) => `${(p.teams as any)?.name} (${(p.teams as any)?.format})`).join(' / ')}
       </p>
 
       <h2>Career Totals</h2>
@@ -65,7 +65,7 @@ export default async function PlayerProfile({ params }: { params: Promise<{ name
       <ul>
         {stats?.map((s, i) => (
           <li key={i}>
-            {s.matches?.match_date} vs {s.matches?.opponent_name} — {s.goals}G {s.assists}A {s.saves}S {s.mvp && '(MVP)'}
+            {(s.matches as any)?.match_date} vs {(s.matches as any)?.opponent_name} — {s.goals}G {s.assists}A {s.saves}S {s.mvp && '(MVP)'}
           </li>
         ))}
       </ul>

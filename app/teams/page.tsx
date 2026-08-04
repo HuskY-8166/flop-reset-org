@@ -16,7 +16,7 @@ export default async function Teams() {
     Fracture: '#E4A0F7',
     Frantic: '#AF69EE',
     Frameshift: '#8F00FF',
-  }
+  }              
 
   const teams3v3 = teams?.filter((t) => t.format === '3v3') ?? []
   const teams2v2 = teams?.filter((t) => t.format === '2v2') ?? []
@@ -27,6 +27,7 @@ export default async function Teams() {
         {list.map((team) => (
           <div
             key={team.id}
+            id={team.name}
             style={{ borderTopColor: colors[team.name] ?? '#666' }}
             className="rounded-xl border-t-4 bg-neutral-900 p-6 hover:bg-neutral-800 transition-colors"
           >

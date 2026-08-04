@@ -141,7 +141,9 @@ export default function Admin() {
         rows.forEach((r) => {
           byReplay[r['replay id']] = byReplay[r['replay id']] || []
           byReplay[r['replay id']].push(r)
-        }) const parsedGames: Game[] = []
+        })
+
+        const parsedGames: Game[] = []
         const parsedStats: PlayerStat[] = []
         let detectedOpponent = ''
 

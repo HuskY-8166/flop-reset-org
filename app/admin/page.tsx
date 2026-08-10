@@ -91,7 +91,7 @@ export default function Admin() {
   async function loadRoster(team: string) {
     const { data: teamRow } = await supabase.from('teams').select('id').eq('name', team).limit(1).single()
     if (!teamRow) return
-    const { data: players } = await supabase.from('players').select('player_id, name').eq('team_id', teamRow.id)
+    const { data: players } = await supabase.from('players').select('player_id, name, aliases').eq('team_id', teamRow.id)
     setRosterPlayers(players ?? [])
   }
 
@@ -139,10 +139,12 @@ export default function Admin() {
     loadRoster(team)
   }
 
-  function findMatchingPlayerId(rawName: string, roster: { player_id: number; name: string }[]) {
+  function findMatchingPlayerId(rawName: string, roster: { player_id: number; name: string; aliases?: string[] }[]) {
     const lower = rawName.toLowerCase()
     const exact = roster.find((p) => p.name.toLowerCase() === lower)
     if (exact) return exact
+    const aliasMatch = roster.find((p) => (p.aliases ?? []).some((a) => a.toLowerCase() === lower))
+    if (aliasMatch) return aliasMatch
     return roster.find((p) => lower.includes(p.name.toLowerCase()) || p.name.toLowerCase().includes(lower)) ?? null
   }
 

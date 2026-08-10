@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+export const dynamic = 'force-dynamic'
 
 export default async function Matches() {
   const { data: series, error } = await supabase
@@ -27,11 +28,12 @@ export default async function Matches() {
           const won = gamesWon > gamesLost
 
           return (
-            <div
+            <a
+              href={`/matches/${s.series_id}`}
               key={s.series_id}
-              className={`rounded-xl bg-neutral-900 border-l-4 p-6 hover:bg-neutral-800 transition-colors ${won ? 'border-emerald-500' : 'border-red-500'}`}
+              className={`block no-underline rounded-xl bg-neutral-900 border-l-4 p-6 hover:bg-neutral-800 transition-colors ${won ? 'border-emerald-500' : 'border-red-500'}`}
             >
-              <div className="flex items-center justify-between mb-3">
+                          <div className="flex items-center justify-between mb-3">
                 <span className="text-xs uppercase tracking-wide text-neutral-500">
                   {(s.teams as any)?.format} • {s.series_date}
                 </span>
@@ -56,7 +58,7 @@ export default async function Matches() {
               </div>
 
               {s.notes && <p className="text-xs text-neutral-600 mt-3">{s.notes}</p>}
-            </div>
+            </a>
           )
         })}
       </div>

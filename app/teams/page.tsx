@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+export const dynamic = 'force-dynamic'
 
 export default async function Teams() {
   const { data: teams, error } = await supabase
@@ -32,8 +33,9 @@ export default async function Teams() {
             className="rounded-xl border-t-4 bg-neutral-900 p-6 hover:bg-neutral-800 transition-colors"
           >
             <div className="flex items-baseline justify-between mb-1">
-              <h2 className="text-2xl font-bold">{team.name}</h2>
-              <span className="text-xs uppercase tracking-wide text-neutral-400">{team.format}</span>
+<h2 className="text-2xl font-bold">
+                <a href={`/teams/${encodeURIComponent(team.name)}`} className="hover:underline">{team.name}</a>
+              </h2>              <span className="text-xs uppercase tracking-wide text-neutral-400">{team.format}</span>
             </div>
             {team.captain && <p className="text-sm text-neutral-400 mb-4">Captain: {team.captain}</p>}
             <ul className="space-y-1">

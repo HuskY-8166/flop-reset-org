@@ -1,6 +1,6 @@
 'use client'
 
-import { Geist, Geist_Mono, Rajdhani } from "next/font/google";
+import { Geist, Geist_Mono, Rajdhani, Teko } from "next/font/google";
 import { usePathname } from "next/navigation";
 import "./globals.css";
 
@@ -14,6 +14,11 @@ const geistMono = Geist_Mono({
 });
 const rajdhani = Rajdhani({
   variable: "--font-display",
+  subsets: ["latin"],
+  weight: ["500", "600", "700"],
+});
+const teko = Teko({
+  variable: "--font-teko",
   subsets: ["latin"],
   weight: ["500", "600", "700"],
 });
@@ -39,7 +44,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} ${rajdhani.variable} h-full antialiased`}
+      className={`${geistSans.variable} ${geistMono.variable} ${rajdhani.variable} ${teko.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <nav style={{ padding: '1rem 2rem', borderBottom: '1px solid #262626', display: 'flex', gap: '1.5rem', backgroundColor: '#111' }}>

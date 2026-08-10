@@ -17,6 +17,7 @@ body {
   background-repeat: no-repeat;
   color: var(--foreground);
   min-height: 100vh;
+  font-family: var(--font-display), sans-serif;
 }
 
 a {
@@ -28,8 +29,11 @@ a:hover {
   text-decoration: underline;
 }
 
-h1, h2 {
+h1, h2, h3 {
+  font-family: var(--font-teko), sans-serif;
   font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
 }
 
 table {

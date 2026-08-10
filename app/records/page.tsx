@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase'
+export const dynamic = 'force-dynamic'
 
 type Row = {
   name: string; team: string; games: number

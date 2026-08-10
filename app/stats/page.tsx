@@ -32,6 +32,8 @@ export default function Stats() {
   const [teamFilter, setTeamFilter] = useState('All')
   const [sortKey, setSortKey] = useState<SortKey>('goals')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  const [view, setView] = useState<'box' | 'process'>('box')
+  const [benchmarks, setBenchmarks] = useState<Record<string, number>>({})
 
   useEffect(() => {
     async function load() {
@@ -40,6 +42,11 @@ export default function Stats() {
         .select('player_id, goals, assists, saves, shots, score, mvp, bpm, avg_speed, demos_inflicted, demos_taken, players ( name, teams ( name, format ) )')
 
       const byPlayer: Record<number, Row> = {}
+
+      const { data: benchmarkData } = await supabase.from('pro_benchmarks').select('stat_name, value')
+      const benchmarkMap: Record<string, number> = {}
+      benchmarkData?.forEach((b: any) => { benchmarkMap[b.stat_name] = b.value })
+      setBenchmarks(benchmarkMap)
 
       full?.forEach((s: any) => {
         const pid = s.player_id
@@ -123,7 +130,7 @@ export default function Stats() {
       <h1 className="text-6xl font-black tracking-tight mb-2">Stats & <span style={{ color: '#AF69EE' }}>Medals</span></h1>
       <p className="text-neutral-500 mb-8">Every stat, every game, fully sortable</p>
 
-      <div className="flex flex-wrap gap-4 mb-8">
+      <div className="flex flex-wrap gap-4 mb-6">
         <input
           placeholder="Search player..."
           value={search}
@@ -141,10 +148,25 @@ export default function Stats() {
         </select>
       </div>
 
+      <div className="flex gap-2 mb-8">
+        <button
+          onClick={() => setView('box')}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold ${view === 'box' ? 'bg-purple-700 text-white' : 'bg-[#1b1b1b] text-neutral-400'}`}
+        >
+          Box Score
+        </button>
+        <button
+          onClick={() => setView('process')}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold ${view === 'process' ? 'bg-purple-700 text-white' : 'bg-[#1b1b1b] text-neutral-400'}`}
+        >
+          Process Skills
+        </button>
+      </div>
+
       {loading && <p className="text-neutral-500">Loading stats...</p>}
       {!loading && filtered.length === 0 && <p className="text-neutral-500">No players match.</p>}
 
-      {!loading && filtered.length > 0 && (
+      {!loading && filtered.length > 0 && view === 'box' && (
         <div className="overflow-x-auto rounded-xl border border-neutral-800">
           <table className="w-full text-sm">
             <thead>
@@ -184,6 +206,41 @@ export default function Stats() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {!loading && filtered.length > 0 && view === 'process' && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {filtered.map((r) => {
+            const skills = [
+              { label: 'Boost Efficiency (BPM)', value: r.bpm, bench: benchmarks.bpm },
+              { label: 'Avg Speed', value: r.avgSpeed, bench: benchmarks.avg_speed },
+              { label: 'Demo Ratio', value: r.demoRatio * 100, bench: 100 },
+            ]
+            return (
+              <div key={r.player_id} className="rounded-xl bg-[#1b1b1b] border border-neutral-800 p-5">
+                <a href={`/players/${encodeURIComponent(r.name)}`} className="font-bold text-white hover:underline">{r.name}</a>
+                <div className="text-xs text-neutral-500 mb-4">{r.team}</div>
+                {skills.map((s) => {
+                  const pct = s.bench ? Math.min(100, Math.round((s.value / s.bench) * 100)) : 0
+                  return (
+                    <div key={s.label} className="mb-3">
+                      <div className="flex justify-between text-xs text-neutral-400 mb-1">
+                        <span>{s.label}</span>
+                        <span>{pct}% of pro</span>
+                      </div>
+                      <div className="w-full bg-neutral-800 rounded-full h-2">
+                        <div
+                          className="h-2 rounded-full"
+                          style={{ width: `${pct}%`, backgroundColor: pct >= 80 ? '#34d399' : pct >= 50 ? '#AF69EE' : '#ef4444' }}
+                        />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })}
         </div>
       )}
     </main>

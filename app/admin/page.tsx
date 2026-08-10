@@ -63,6 +63,8 @@ export default function Admin() {
   // Manage
   const [manageSeries, setManageSeries] = useState<any[]>([])
   const [manageBatches, setManageBatches] = useState<{ batch_label: string; format: string; count: number }[]>([])
+  const [mvpMatchId, setMvpMatchId] = useState('')
+  const [mvpCandidates, setMvpCandidates] = useState<any[]>([])
 
   async function loadScheduled() {
     const { data } = await supabase
@@ -70,6 +72,20 @@ export default function Admin() {
       .select('scheduled_id, opponent_name, match_date, match_time, status, teams ( name, format )')
       .order('match_date', { ascending: true })
     setScheduledList(data ?? [])
+  }
+
+  async function loadMvpCandidates(matchId: string) {
+    const { data } = await supabase
+      .from('match_player_stats')
+      .select('stat_id, mvp, players ( name )')
+      .eq('match_id', matchId)
+    setMvpCandidates(data ?? [])
+  }
+
+  async function setMvp(statId: number, matchId: string) {
+    await supabase.from('match_player_stats').update({ mvp: false }).eq('match_id', matchId)
+    await supabase.from('match_player_stats').update({ mvp: true }).eq('stat_id', statId)
+    loadMvpCandidates(matchId)
   }
 
   async function loadRoster(team: string) {
@@ -703,6 +719,27 @@ export default function Admin() {
               </div>
             ))}
           </div>
+
+          <h2 className="text-xl font-bold mb-4 mt-10">Assign MVP</h2>
+          <div className="flex gap-2 mb-4">
+            <input
+              placeholder="Match ID"
+              value={mvpMatchId}
+              onChange={(e) => setMvpMatchId(e.target.value)}
+              className="bg-neutral-900 border border-neutral-700 rounded px-3 py-2 text-sm"
+            />
+            <button onClick={() => loadMvpCandidates(mvpMatchId)} className="bg-purple-700 px-4 py-2 rounded text-sm">
+              Load Players
+            </button>
+          </div>
+          {mvpCandidates.map((c) => (
+            <div key={c.stat_id} className="flex items-center justify-between border border-neutral-800 rounded p-3 mb-2">
+              <span>{c.players?.name} {c.mvp && <span className="text-purple-400 ml-2">★ Current MVP</span>}</span>
+              <button onClick={() => setMvp(c.stat_id, mvpMatchId)} className="text-sm text-purple-400">
+                Set MVP
+              </button>
+            </div>
+          ))}
 
           <h2 className="text-xl font-bold mb-4">Power Rankings Imports</h2>
           <div className="space-y-2">

@@ -1,5 +1,7 @@
 import { supabase } from '@/lib/supabase'
 
+export const dynamic = 'force-dynamic'
+
 export default async function Schedule() {
   const { data: upcoming, error } = await supabase
     .from('scheduled_matches')

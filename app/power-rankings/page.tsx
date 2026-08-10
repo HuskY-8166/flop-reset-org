@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { calculateEloWithHistory } from '@/lib/elo'
+export const dynamic = 'force-dynamic'
 
 const FLOP_TEAMS = ['Flop Reset Frameshift', 'Flop Reset - Frantic', 'Flop Reset | Fracture']
 const FLOP_TEAM_SLUGS: Record<string, string> = {

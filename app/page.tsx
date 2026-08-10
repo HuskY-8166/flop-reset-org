@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase'
 import { calculateEloWithHistory } from '@/lib/elo'
+export const dynamic = 'force-dynamic'
 
 const TEAM_COLORS: Record<string, string> = {
   Fracture: '#E4A0F7',

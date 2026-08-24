@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 'use client'
 
 import { useEffect, useState } from 'react'
@@ -5,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import Papa from 'papaparse'
 import { supabase } from '@/lib/supabase'
 import { parseLeagueMatches } from '@/lib/parseLeagueMatches'
+import { formatCompetitionAdminLabel } from '@/lib/competitions'
 
 type Competition = {
   id: number
@@ -36,48 +38,48 @@ type PlayerStat = {
   shots: number
   score: number
 
-  bpm: number
-  avgSpeed: number
+  bpm: number | null
+  avgSpeed: number | null
 
-  timeSupersonic: number
-  timeOnGround: number
-  timeLowAir: number
-  timeHighAir: number
+  timeSupersonic: number | null
+  timeOnGround: number | null
+  timeLowAir: number | null
+  timeHighAir: number | null
 
-  timeDefensiveThird: number
-  timeNeutralThird: number
-  timeOffensiveThird: number
+  timeDefensiveThird: number | null
+  timeNeutralThird: number | null
+  timeOffensiveThird: number | null
 
-  percentageSupersonicSpeed: number
-  percentageOnGround: number
-  percentageLowAir: number
-  percentageHighAir: number
+  percentageSupersonicSpeed: number | null
+  percentageOnGround: number | null
+  percentageLowAir: number | null
+  percentageHighAir: number | null
 
-  percentageDefensiveThird: number
-  percentageNeutralThird: number
-  percentageOffensiveThird: number
+  percentageDefensiveThird: number | null
+  percentageNeutralThird: number | null
+  percentageOffensiveThird: number | null
 
-  percentageMostBack: number
-  percentageMostForward: number
-  percentageBehindBall: number
-  percentageInFrontOfBall: number
+  percentageMostBack: number | null
+  percentageMostForward: number | null
+  percentageBehindBall: number | null
+  percentageInFrontOfBall: number | null
 
-  percentageDefensiveHalf: number
-  percentageOffensiveHalf: number
+  percentageDefensiveHalf: number | null
+  percentageOffensiveHalf: number | null
 
-  avgDistanceToBall: number
-  avgDistanceToBallHasPossession: number
-  avgDistanceToBallNoPossession: number
-  avgDistanceToTeammates: number
+  avgDistanceToBall: number | null
+  avgDistanceToBallHasPossession: number | null
+  avgDistanceToBallNoPossession: number | null
+  avgDistanceToTeammates: number | null
 
-  demosInflicted: number
-  demosTaken: number
+  demosInflicted: number | null
+  demosTaken: number | null
 
-  boostCollected: number
-  boostStolen: number
+  boostCollected: number | null
+  boostStolen: number | null
 
-  zeroBoostTime: number
-  zeroBoostPct: number
+  zeroBoostTime: number | null
+  zeroBoostPct: number | null
 }
 
 type ImportMode =
@@ -130,6 +132,19 @@ function numberFrom(
   }
 
   return 0
+}
+
+function nullableNumberFrom(
+  row: Record<string, any>,
+  ...keys: string[]
+): number | null {
+  for (const key of keys) {
+    const raw = row[key]
+    if (raw === undefined || raw === null || raw === '') continue
+    const value = Number(raw)
+    if (Number.isFinite(value)) return value
+  }
+  return null
 }
 
 function textFrom(
@@ -304,6 +319,9 @@ export default function Admin() {
     useState('')
 
   const [importDate, setImportDate] =
+    useState('')
+
+  const [importBestOf, setImportBestOf] =
     useState('')
 
   const [games, setGames] =
@@ -794,56 +812,6 @@ export default function Admin() {
       return aliasMatch
     }
 
-    if (
-      normalized.length >= 4
-    ) {
-      const fuzzy =
-        roster.find(
-          (player) => {
-            const primary =
-              normalizePlayerName(
-                player.name
-              )
-
-            if (
-              normalized.includes(
-                primary
-              ) ||
-              primary.includes(
-                normalized
-              )
-            ) {
-              return true
-            }
-
-            return (
-              player.aliases ??
-              []
-            ).some(
-              (alias) => {
-                const a =
-                  normalizePlayerName(
-                    alias
-                  )
-
-                return (
-                  normalized.includes(
-                    a
-                  ) ||
-                  a.includes(
-                    normalized
-                  )
-                )
-              }
-            )
-          }
-        )
-
-      if (fuzzy) {
-        return fuzzy
-      }
-    }
-
     return null
   }
 
@@ -863,6 +831,7 @@ export default function Admin() {
     setPlayerStats([])
     setImportOpponent('')
     setImportDate('')
+    setImportBestOf('')
     setUnmatchedPlayers([])
 
     resetExistingSeriesCheck()
@@ -872,58 +841,33 @@ export default function Admin() {
     selectedCompetitionId = importCompetitionId,
     selectedTeam = importTeam
   ) {
-    const {
-      data: competition,
-      error: competitionError,
-    } = await supabase
+    return resolveCompetitionTeam(selectedCompetitionId, selectedTeam)
+  }
+
+  async function resolveCompetitionTeam(selectedCompetitionId: string, selectedTeam: string) {
+    const { data: competition, error: competitionError } = await supabase
       .from('competitions')
-      .select(
-        'id, format'
-      )
-      .eq(
-        'id',
-        selectedCompetitionId
-      )
+      .select('id, name, format')
+      .eq('id', selectedCompetitionId)
       .single()
 
-    if (
-      competitionError ||
-      !competition
-    ) {
-      throw new Error(
-        'Competition not found.'
-      )
-    }
+    if (competitionError || !competition) throw new Error('Competition not found.')
 
-    const {
-      data: team,
-      error: teamError,
-    } = await supabase
+    const { data: candidates, error: teamError } = await supabase
       .from('teams')
-      .select('id')
-      .eq(
-        'name',
-        selectedTeam
-      )
-      .eq(
-        'format',
-        competition.format
-      )
-      .single()
+      .select('id, name, format')
+      .eq('name', selectedTeam)
+      .order('id')
 
-    if (
-      teamError ||
-      !team
-    ) {
-      throw new Error(
-        `Team "${selectedTeam}" was not found for ${competition.format}.`
-      )
+    if (teamError) throw new Error(teamError.message)
+    const team = candidates?.find((candidate) => candidate.format === competition.format)
+    if (!team) {
+      const mismatched = candidates?.[0]
+      if (mismatched) throw new Error(`${mismatched.name} (${mismatched.format}) cannot be entered into a ${competition.format} competition.`)
+      throw new Error(`${selectedTeam} is not a registered Flop Reset squad.`)
     }
 
-    return {
-      competition,
-      team,
-    }
+    return { competition, team }
   }
 
   function statRowsMatch(
@@ -1472,41 +1416,41 @@ export default function Admin() {
                   ourGoals += goals
 
                   const timeOnGround =
-                    numberFrom(
+                    nullableNumberFrom(
                       row,
                       'time on ground'
                     )
 
                   const timeLowAir =
-                    numberFrom(
+                    nullableNumberFrom(
                       row,
                       'time low in air'
                     )
 
                   const timeHighAir =
-                    numberFrom(
+                    nullableNumberFrom(
                       row,
                       'time high in air'
                     )
 
                   const zeroBoostTime =
-                    numberFrom(
+                    nullableNumberFrom(
                       row,
                       '0 boost time'
                     )
 
                   const trackedTime =
-                    timeOnGround +
-                    timeLowAir +
-                    timeHighAir
+                    timeOnGround !== null && timeLowAir !== null && timeHighAir !== null
+                      ? timeOnGround + timeLowAir + timeHighAir
+                      : null
 
                   const zeroBoostPct =
-                    trackedTime > 0
+                    trackedTime !== null && trackedTime > 0 && zeroBoostTime !== null
                       ? (
                           zeroBoostTime /
                           trackedTime
                         ) * 100
-                      : 0
+                      : null
 
                   parsedStats.push({
                     replayId,
@@ -1544,19 +1488,19 @@ export default function Admin() {
                       ),
 
                     bpm:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'bpm'
                       ),
 
                     avgSpeed:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'avg speed'
                       ),
 
                     timeSupersonic:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'time supersonic speed'
                       ),
@@ -1568,85 +1512,85 @@ export default function Admin() {
                     timeHighAir,
 
                     timeDefensiveThird:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'time defensive third'
                       ),
 
                     timeNeutralThird:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'time neutral third'
                       ),
 
                     timeOffensiveThird:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'time offensive third'
                       ),
 
                     percentageSupersonicSpeed:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage supersonic speed'
                       ),
 
                     percentageOnGround:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage on ground'
                       ),
 
                     percentageLowAir:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage low in air'
                       ),
 
                     percentageHighAir:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage high in air'
                       ),
 
                     percentageDefensiveThird:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage defensive third'
                       ),
 
                     percentageNeutralThird:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage neutral third'
                       ),
 
                     percentageOffensiveThird:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage offensive third'
                       ),
 
                     percentageMostBack:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage most back'
                       ),
 
                     percentageMostForward:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage most forward'
                       ),
 
                     percentageBehindBall:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage behind ball'
                       ),
 
                     percentageInFrontOfBall:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage in front of ball',
                         'percentage in front of ball.1',
@@ -1654,62 +1598,62 @@ export default function Admin() {
                       ),
 
                     percentageDefensiveHalf:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage defensive half'
                       ),
 
                     percentageOffensiveHalf:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'percentage offensive half'
                       ),
 
                     avgDistanceToBall:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'avg distance to ball'
                       ),
 
                     avgDistanceToBallHasPossession:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'avg distance to ball has possession'
                       ),
 
                     avgDistanceToBallNoPossession:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'avg distance to ball no possession'
                       ),
 
                     avgDistanceToTeammates:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'avg distance to team mates',
                         'avg distance to teammates'
                       ),
 
                     demosInflicted:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'demos inflicted'
                       ),
 
                     demosTaken:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'demos taken'
                       ),
 
                     boostCollected:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'amount collected'
                       ),
 
                     boostStolen:
-                      numberFrom(
+                      nullableNumberFrom(
                         row,
                         'amount stolen'
                       ),
@@ -1832,6 +1776,12 @@ export default function Admin() {
       return
     }
 
+    const intendedBestOf = Number(importBestOf)
+    if (!Number.isInteger(intendedBestOf) || intendedBestOf < games.length || intendedBestOf < 1 || intendedBestOf % 2 === 0) {
+      setImportMessage('Enter the intended odd best-of value (for example 3, 5, or 7); it cannot be smaller than the games in this CSV.')
+      return
+    }
+
     setImportMessage(
       'Saving new series...'
     )
@@ -1891,7 +1841,7 @@ export default function Admin() {
             importOpponent,
 
           best_of:
-            games.length,
+            intendedBestOf,
 
           series_date:
             importDate,
@@ -2373,59 +2323,7 @@ export default function Admin() {
     setMessage('Saving...')
 
     try {
-      const {
-        competition,
-        team,
-      } = await (async () => {
-        const {
-          data: competition,
-          error,
-        } = await supabase
-          .from('competitions')
-          .select(
-            'id, format'
-          )
-          .eq(
-            'id',
-            competitionId
-          )
-          .single()
-
-        if (
-          error ||
-          !competition
-        ) {
-          throw new Error(
-            'Competition not found.'
-          )
-        }
-
-        const {
-          data: team,
-        } = await supabase
-          .from('teams')
-          .select('id')
-          .eq(
-            'name',
-            teamName
-          )
-          .eq(
-            'format',
-            competition.format
-          )
-          .single()
-
-        if (!team) {
-          throw new Error(
-            'Team not found for that competition format.'
-          )
-        }
-
-        return {
-          competition,
-          team,
-        }
-      })()
+      const { competition, team } = await resolveCompetitionTeam(competitionId, teamName)
 
       /*
        * Forfeit result is still represented by 1-0 / 0-1
@@ -2571,46 +2469,9 @@ export default function Admin() {
       'Saving...'
     )
 
-    const {
-      data: competition,
-    } = await supabase
-      .from('competitions')
-      .select('format')
-      .eq(
-        'id',
-        scheduleCompetitionId
-      )
-      .single()
-
-    const {
-      data: team,
-    } = await supabase
-      .from('teams')
-      .select('id')
-      .eq(
-        'name',
-        scheduleTeamName
-      )
-      .eq(
-        'format',
-        competition?.format
-      )
-      .single()
-
-    if (!team) {
-      setScheduleMessage(
-        'Team not found for that format.'
-      )
-      return
-    }
-
-    const {
-      error,
-    } = await supabase
-      .from(
-        'scheduled_matches'
-      )
-      .insert({
+    try {
+      const { team } = await resolveCompetitionTeam(scheduleCompetitionId, scheduleTeamName)
+      const { error } = await supabase.from('scheduled_matches').insert({
         competition_id:
           scheduleCompetitionId,
 
@@ -2634,12 +2495,7 @@ export default function Admin() {
           'scheduled',
       })
 
-    if (error) {
-      setScheduleMessage(
-        `Error: ${error.message}`
-      )
-      return
-    }
+      if (error) throw error
 
     setScheduleMessage(
       'Scheduled match added!'
@@ -2650,7 +2506,10 @@ export default function Admin() {
     setScheduleTime('')
     setScheduleNotes('')
 
-    loadScheduled()
+      loadScheduled()
+    } catch (error: any) {
+      setScheduleMessage(`Error: ${error.message}`)
+    }
   }
 
   async function deleteScheduled(
@@ -3061,12 +2920,7 @@ export default function Admin() {
                       competition.id
                     }
                   >
-                    {
-                      competition.name
-                    } (
-                    {
-                      competition.format
-                    })
+                    {formatCompetitionAdminLabel(competition)}
                   </option>
                 )
               )}
@@ -3278,12 +3132,7 @@ export default function Admin() {
                       competition.id
                     }
                   >
-                    {
-                      competition.name
-                    } (
-                    {
-                      competition.format
-                    })
+                    {formatCompetitionAdminLabel(competition)}
                   </option>
                 )
               )}
@@ -3403,6 +3252,20 @@ export default function Admin() {
                 />
               </label>
 
+              <label className="block mb-5">
+                Intended Best Of:
+                <input
+                  type="number"
+                  min={games.length}
+                  step="2"
+                  value={importBestOf}
+                  onChange={(e) => setImportBestOf(e.target.value)}
+                  placeholder="3, 5, or 7"
+                  className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
+                />
+                <span className="mt-1 block text-xs text-neutral-500">Use the scheduled series length, not only the number of games played.</span>
+              </label>
+
               {/* IMPORT MODE */}
 
               <div
@@ -3520,18 +3383,11 @@ export default function Admin() {
                         player.saves
                       }
                       SV · BPM{' '}
-                      {Math.round(
-                        player.bpm
-                      )}{' '}
+                      {player.bpm === null ? '—' : Math.round(player.bpm)}{' '}
                       · Speed{' '}
-                      {Math.round(
-                        player.avgSpeed
-                      )}{' '}
+                      {player.avgSpeed === null ? '—' : Math.round(player.avgSpeed)}{' '}
                       · Zero Boost{' '}
-                      {player.zeroBoostPct.toFixed(
-                        1
-                      )}
-                      %
+                      {player.zeroBoostPct === null ? '—' : `${player.zeroBoostPct.toFixed(1)}%`}
                     </div>
                   )
                 )}
@@ -3618,12 +3474,7 @@ export default function Admin() {
                         competition.id
                       }
                     >
-                      {
-                        competition.name
-                      } (
-                      {
-                        competition.format
-                      })
+                      {formatCompetitionAdminLabel(competition)}
                     </option>
                   )
                 )}

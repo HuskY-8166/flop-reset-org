@@ -6,7 +6,9 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "typecheck": "tsc --noEmit --incremental false --allowImportingTsExtensions",
+    "test:domain": "node --experimental-strip-types tests/results.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",

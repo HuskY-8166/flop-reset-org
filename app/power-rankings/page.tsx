@@ -31,7 +31,7 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
   const biggestFaller = [...others].sort((a, b) => a.rankMove - b.rankMove)[0]
   const eloSurge = [...teamSummaries].sort((a, b) => b.lastRoundDelta - a.lastRoundDelta)[0]
   const teamOfRound = [...teamSummaries].sort((a, b) => b.teamOfRoundScore - a.teamOfRoundScore)[0]
-  const giantKiller = [...teamSummaries].sort((a, b) => b.giantKillerScore - a.giantKillerScore)[0]
+  const giantKiller = [...teamSummaries].filter((team) => team.giantKillerScore > 0).sort((a, b) => b.giantKillerScore - a.giantKillerScore)[0]
 
   const rankedTeams = teamSummaries.filter((t) => t.overallRank !== null)
   const byTier: Record<string, typeof rankedTeams> = {}
@@ -52,7 +52,11 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
       <div className="rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9 mb-8">
         <div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">Competitive form</div>
         <h1 className="text-4xl md:text-6xl font-black tracking-tight mt-2">Power <span style={{ color: '#AF69EE' }}>Rankings</span></h1>
-        <p className="text-neutral-400 mt-2 max-w-3xl">Elo-based team strength from completed, non-forfeit league results. Ratings update after each tracked result and remain separated by format.</p>
+        <p className="text-neutral-400 mt-2 max-w-3xl">Elo-based team strength from completed league results. Ratings update after each tracked result, remain separated by format, and apply half-weight movement to forfeits.</p>
+        <div className="mt-5 rounded-2xl border border-amber-800/70 bg-amber-950/20 p-4 text-sm text-amber-100">
+          <div className="font-black uppercase tracking-[.16em]">Legacy ranking scope</div>
+          <p className="mt-1 text-amber-100/80">These imported rankings are format-scoped but are not yet linked to a circuit. Treat this as the Summer Circuit 2026 archive only. A prepared database upgrade adds circuit ownership before Fall Circuit imports begin, so Summer and Fall ratings cannot be mixed.</p>
+        </div>
         <div className="mt-4 text-sm text-neutral-500">Latest completed round: <span className="font-semibold text-white">{latestRound ?? 'Not available'}</span></div>
       </div>
 
@@ -141,9 +145,9 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
         )}
         {giantKiller && (
           <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-4">
-            <div className="text-sm text-neutral-400">🐉 Giant Killer</div>
+            <div className="text-sm text-neutral-400">🐉 Giant Killer · season to date</div>
             <div className="font-bold">{giantKiller.team}</div>
-            <div className="text-neutral-400 text-sm">{giantKiller.tier}, ranked #{giantKiller.overallRank} overall</div>
+            <div className="text-neutral-400 text-sm">{giantKiller.giantKillerScore.toFixed(0)} cumulative pre-match Elo gap defeated</div>
           </div>
         )}
       </div>
@@ -188,7 +192,9 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
           <p><strong className="text-white">What raises a rating:</strong> beating a higher-rated opponent and winning by more than the typical margin for that tier and round.</p>
           <p><strong className="text-white">What lowers a rating:</strong> losing—especially to a lower-rated opponent. Early matches move ratings faster through a larger K-factor.</p>
           <p><strong className="text-white">Starting point:</strong> teams begin from a tier-based seed. Rankings therefore combine tier context with completed results.</p>
-          <p><strong className="text-white">Data rules:</strong> 2v2 and 3v3 are calculated separately. Forfeits and incomplete fixtures are excluded entirely.</p>
+          <p><strong className="text-white">Round movement:</strong> the displayed round delta is the sum of every rating change a team records in that round, not merely its final match.</p>
+          <p><strong className="text-white">Giant Killer:</strong> season-to-date credit sums the pre-match rating gap only when a lower-rated team beats a higher-rated opponent. Forfeits do not qualify.</p>
+          <p><strong className="text-white">Data rules:</strong> 2v2 and 3v3 are calculated separately. Incomplete fixtures are excluded; forfeits use half the normal K-factor and no score-margin multiplier.</p>
         </div>
       </details>
     </main>

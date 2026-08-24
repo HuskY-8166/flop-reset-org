@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 function looksLikeDate(s: string) {
   return /^[A-Za-z]{3} \d{1,2}, \d{4}$/.test(s || '')
 }

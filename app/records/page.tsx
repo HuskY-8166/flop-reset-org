@@ -8,6 +8,7 @@ import {
   rankProcessSkill,
   type ProcessPlayer,
 } from '@/lib/processSkills'
+import { getGameOutcome } from '@/lib/results'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,16 +27,17 @@ type Stat = {
   avg_distance_to_ball_has_possession: number | null
   avg_distance_to_ball_no_possession: number | null; avg_distance_to_teammates: number | null
   zero_boost_pct: number | null
-  players: { name: string | null; teams: { name: string | null; format: string | null } | null } | null
+  players: { name: string | null } | null
   matches: { match_id: number; match_date: string | null; opponent_name: string | null
     flop_reset_score: number | null; opponent_score: number | null; series_id: number | null
-    is_forfeit: boolean | null } | null
+    is_forfeit: boolean | null; forfeit_result?: string | null; result_override?: string | null
+    teams: { name: string | null; format: string | null } | null } | null
 }
 
 type Series = { series_id: number; opponent_name: string | null; series_date: string | null
   teams: { name: string | null; format: string | null } | null
   matches: { match_id: number; flop_reset_score: number | null; opponent_score: number | null
-    is_forfeit: boolean | null }[] | null }
+    is_forfeit: boolean | null; forfeit_result?: string | null; result_override?: string | null }[] | null }
 
 type Career = { id: string; name: string; team: string; format: string; games: number; goals: number
   assists: number; saves: number; shots: number; score: number; mvps: number; bpm: number
@@ -77,8 +79,8 @@ function ranked<T>(rows: T[], value: (row: T) => number, lower = false) {
 function careerRows(stats: Stat[]) {
   const map = new Map<string, Career>()
   for (const s of stats) {
-    const name = s.players?.name ?? 'Unknown', team = s.players?.teams?.name ?? 'Unknown'
-    const format = s.players?.teams?.format ?? 'Unknown', id = `${name.toLowerCase()}|${format}`
+    const name = s.players?.name ?? 'Unknown', team = s.matches?.teams?.name ?? 'Unknown'
+    const format = s.matches?.teams?.format ?? 'Unknown', id = `${name.toLowerCase()}|${team.toLowerCase()}|${format}`
     const r = map.get(id) ?? { id, name, team, format, games: 0, goals: 0, assists: 0,
       saves: 0, shots: 0, score: 0, mvps: 0, bpm: 0, speed: 0, bpmN: 0, speedN: 0 }
     r.games++; r.goals += num(s.goals); r.assists += num(s.assists); r.saves += num(s.saves)
@@ -153,14 +155,14 @@ export default async function Records({ searchParams }: { searchParams: Promise<
       percentage_most_back, percentage_most_forward, percentage_behind_ball, percentage_in_front_of_ball,
       percentage_defensive_half, percentage_offensive_half, avg_distance_to_ball, avg_distance_to_ball_has_possession,
       avg_distance_to_ball_no_possession, avg_distance_to_teammates, zero_boost_pct,
-      players ( name, teams ( name, format ) ), matches ( match_id, match_date, opponent_name, flop_reset_score, opponent_score, series_id, is_forfeit )`),
-    supabase.from('series').select(`series_id, opponent_name, series_date, teams ( name, format ), matches ( match_id, flop_reset_score, opponent_score, is_forfeit )`),
+      players ( name ), matches ( match_id, match_date, opponent_name, flop_reset_score, opponent_score, series_id, is_forfeit, teams ( name, format ) )`),
+    supabase.from('series').select(`series_id, opponent_name, series_date, teams ( name, format ), matches ( * )`),
   ])
   const allStats = (rawStats ?? []) as unknown as Stat[], allSeries = (rawSeries ?? []) as unknown as Series[]
-  const formats = [...new Set(allStats.map((s) => s.players?.teams?.format ?? '').filter(Boolean))].sort()
+  const formats = [...new Set(allStats.map((s) => s.matches?.teams?.format ?? '').filter(Boolean))].sort()
   const selected = query.format && formats.includes(query.format) ? query.format : 'All'
   const inFormat = (format?: string | null) => selected === 'All' || selected === format
-  const stats = allStats.filter((s) => inFormat(s.players?.teams?.format)), series = allSeries.filter((s) => inFormat(s.teams?.format))
+  const stats = allStats.filter((s) => inFormat(s.matches?.teams?.format)), series = allSeries.filter((s) => inFormat(s.teams?.format))
   const competitive = stats.filter((s) => !s.matches?.is_forfeit), careers = careerRows(competitive)
   const threshold = getEligibilityThreshold(careers), eligible = careers.filter((r) => r.games >= threshold)
 
@@ -192,8 +194,8 @@ export default async function Records({ searchParams }: { searchParams: Promise<
     ['Most Shots — Single Game', 'shots'], ['Highest Score — Single Game', 'score'], ['Highest BPM — Single Game', 'bpm'],
     ['Fastest Avg Speed — Single Game', 'avg_speed'], ['Most Demos Inflicted — Single Game', 'demos_inflicted'], ['Most Boost Stolen — Single Game', 'boost_stolen'],
   ] as const
-  const performance = (s: Stat, value: number): Holder => ({ id: String(s.stat_id), name: s.players?.name ?? 'Unknown', team: s.players?.teams?.name ?? 'Unknown',
-    format: s.players?.teams?.format ?? 'Unknown', opponent: s.matches?.opponent_name ?? 'Unknown', date: s.matches?.match_date ?? '', value,
+  const performance = (s: Stat, value: number): Holder => ({ id: String(s.stat_id), name: s.players?.name ?? 'Unknown', team: s.matches?.teams?.name ?? 'Unknown',
+    format: s.matches?.teams?.format ?? 'Unknown', opponent: s.matches?.opponent_name ?? 'Unknown', date: s.matches?.match_date ?? '', value,
     our: num(s.matches?.flop_reset_score), their: num(s.matches?.opponent_score) })
   const gameRecords: BookRecord[] = gameDefs.map(([label, key]) => {
     const pool = competitive.filter((s) => (['bpm','avg_speed','demos_inflicted','boost_stolen'].includes(key) ? has(s[key]) : true) && num(s[key]) > 0), win = tied(pool, (s) => num(s[key]))
@@ -205,7 +207,8 @@ export default async function Records({ searchParams }: { searchParams: Promise<
     if (s.matches?.series_id == null) continue
     const id = `${s.matches.series_id}|${s.player_id}`, r = seriesMap.get(id) ?? { ...performance(s, 0), id, our: undefined, their: undefined, games: 0, wins: 0, losses: 0, goals: 0, assists: 0, saves: 0, shots: 0, score: 0 }
     r.games!++; r.goals += num(s.goals); r.assists += num(s.assists); r.saves += num(s.saves); r.shots += num(s.shots); r.score += num(s.score)
-    if (num(s.matches.flop_reset_score) > num(s.matches.opponent_score)) r.wins!++; else if (num(s.matches.flop_reset_score) < num(s.matches.opponent_score)) r.losses!++
+    const outcome = getGameOutcome(s.matches)
+    if (outcome.result === 'W') r.wins!++; else if (outcome.result === 'L') r.losses!++
     seriesMap.set(id, r)
   }
   const seriesRows = [...seriesMap.values()]
@@ -232,14 +235,14 @@ export default async function Records({ searchParams }: { searchParams: Promise<
   const teamRecords: BookRecord[] = [{ label: 'Biggest Game Win', value: blowouts.length ? `+${num(blowouts[0].flop_reset_score) - num(blowouts[0].opponent_score)}` : '—', holders: blowouts.map((g) => teamPerf(g, num(g.flop_reset_score) - num(g.opponent_score))) }, { label: 'Most Team Goals in One Game', value: scoring.length ? String(num(scoring[0].flop_reset_score)) : '—', holders: scoring.map((g) => teamPerf(g, num(g.flop_reset_score))) }]
 
   const process = (selected === 'All' ? formats : [selected]).flatMap((format) => {
-    const fs = competitive.filter((s) => s.players?.teams?.format === format), rows = careerRows(fs)
-    const players = rows.map((r) => makeProcessPlayer(r, fs.filter((s) => s.players?.name?.toLowerCase() === r.name.toLowerCase())))
+    const fs = competitive.filter((s) => s.matches?.teams?.format === format), rows = careerRows(fs)
+    const players = rows.map((r) => makeProcessPlayer(r, fs.filter((s) => s.players?.name?.toLowerCase() === r.name.toLowerCase() && s.matches?.teams?.name === r.team)))
     const results = buildProcessSkillResults(players)
     return PROCESS_SKILLS.map((skill) => { const ranked = rankProcessSkill(results, skill.key), gold = ranked.filter((r) => r.rank === 1); return { format, skill, threshold: getEligibilityThreshold(players), gold, value: gold.length ? formatProcessSkillValue(skill.key, gold[0][skill.key]) : '—' } })
   })
 
   const chronological = [...competitive].filter((s) => s.matches?.match_date).sort((a,b) => (a.matches?.match_date ?? '').localeCompare(b.matches?.match_date ?? ''))
-  const timeline: (Holder & { category: string; status: string })[] = []
+  const timeline: (Holder & { category: string; status: string; jointNames: string[] })[] = []
   const meaningfulMinimums = [2, 2, 3, 4, 300]
   for (const [definitionIndex, [label, key]] of gameDefs.slice(0,5).entries()) {
     let best = 0
@@ -255,16 +258,19 @@ export default async function Records({ searchParams }: { searchParams: Promise<
       const previousValue = best, previousNames = currentNames
       const setters = day.filter((s) => num(s[key]) === dayBest)
       currentNames = [...new Set(setters.map((s) => s.players?.name ?? 'Unknown'))]
-      timeline.push(...setters.map((s) => ({ ...performance(s, dayBest), category: label.replace(' — Single Game',''), status: 'NEW RECORD',
-        previousValue: previousValue || undefined, previousNames: previousValue ? previousNames : undefined })))
+      const representative = performance(setters[0], dayBest)
+      timeline.push({ ...representative, id: `${label}-${representative.date}`, name: currentNames.join(' & '), jointNames: currentNames,
+        category: label.replace(' — Single Game',''), status: 'NEW RECORD', previousValue: previousValue || undefined,
+        previousNames: previousValue ? previousNames : undefined })
       best = dayBest
     }
   }
   timeline.sort((a,b) => (b.date ?? '').localeCompare(a.date ?? ''))
-  const uniqueGames = new Set(allStats.map((s) => s.matches?.match_id).filter(Boolean)).size
+  const uniqueGames = new Set(allSeries.flatMap((row) => row.matches ?? []).map((match) => match.match_id)).size
   const uniquePlayers = new Set(allStats.map((s) => s.players?.name).filter(Boolean)).size
-  const uniqueTeams = new Set(allStats.map((s) => `${s.players?.teams?.name}|${s.players?.teams?.format}`)).size
-  const earliest = allStats.map((s) => s.matches?.match_date ?? '').filter(Boolean).sort()[0]
+  const uniqueTeams = new Set(allStats.map((s) => `${s.matches?.teams?.name}|${s.matches?.teams?.format}`)).size
+  const earliestStat = allStats.map((s) => s.matches?.match_date ?? '').filter(Boolean).sort()[0]
+  const earliestCompetition = allSeries.map((row) => row.series_date ?? '').filter(Boolean).sort()[0]
   const advanced = stats.filter((s) => has(s.percentage_supersonic_speed) || has(s.zero_boost_pct)).length
   const basic = stats.filter((s) => has(s.bpm) || has(s.avg_speed) || has(s.demos_inflicted) || has(s.boost_collected)).length
   const held = new Map<string, { name: string; records: string[] }>()
@@ -278,17 +284,18 @@ export default async function Records({ searchParams }: { searchParams: Promise<
   seriesRecords.forEach((record) => record.holders.forEach((h) => credit(h.name, record.label)))
   process.forEach((record) => record.gold.forEach((h) => credit(h.name, `${record.format} ${record.skill.label}`)))
   const recordHolders = [...held.values()].sort((a,b) => b.records.length - a.records.length || a.name.localeCompare(b.name))
-  const recordKing = recordHolders[0]
+  const recordKings = recordHolders.filter((entry) => entry.records.length === recordHolders[0]?.records.length)
   const latestRecord = timeline[0]
+  const latestActivity = latestRecord ? timeline.filter((entry) => entry.date?.slice(0, 10) === latestRecord.date?.slice(0, 10)) : []
 
   const grid = (records: BookRecord[]) => <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{records.map((r) => <RecordCard key={r.label} record={r} />)}</div>
   return <main className="mx-auto max-w-7xl px-4 py-10 md:px-8 md:py-16">
     <header className="rounded-3xl border border-purple-900/40 bg-[radial-gradient(circle_at_top_right,rgba(175,105,238,.2),transparent_38%),linear-gradient(135deg,#18131d,#0d0d0d_62%)] p-6 md:p-10">
-      <div className="text-xs font-black uppercase tracking-[.28em] text-purple-400">Flop Reset</div><h1 className="mt-3 text-4xl font-black text-white md:text-7xl">RECORD BOOK</h1><p className="mt-3 text-neutral-400 md:text-lg">Competitive history since {earliest ? fmtDate(earliest) : 'the archive began'}.</p>
-      <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-5">{[['Competitive Games',uniqueGames],['Competitive Series',allSeries.length],['Players Recorded',uniquePlayers],['Recorded Squads',uniqueTeams],['Archive Begins',earliest ? fmtDate(earliest) : '—']].map(([label,value]) => <div key={label} className="rounded-xl border border-white/10 bg-black/20 p-4"><div className="text-xs uppercase text-neutral-500">{label}</div><div className="mt-1 text-xl font-black text-white">{value}</div></div>)}</div>
+      <div className="text-xs font-black uppercase tracking-[.28em] text-purple-400">Flop Reset</div><h1 className="mt-3 text-4xl font-black text-white md:text-7xl">RECORD BOOK</h1><p className="mt-3 text-neutral-400 md:text-lg">Competitive history since {earliestCompetition ? fmtDate(earliestCompetition) : 'the archive began'}; player-stat coverage is tracked separately.</p>
+      <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">{[['Competitive Games',uniqueGames],['Competitive Series',allSeries.length],['Players Recorded',uniquePlayers],['Recorded Squads',uniqueTeams],['History Since',earliestCompetition ? fmtDate(earliestCompetition) : '—'],['Player Stats Since',earliestStat ? fmtDate(earliestStat) : '—']].map(([label,value]) => <div key={label} className="rounded-xl border border-white/10 bg-black/20 p-4"><div className="text-xs uppercase text-neutral-500">{label}</div><div className="mt-1 text-xl font-black text-white">{value}</div></div>)}</div>
       <div className="mt-4 grid gap-3 md:grid-cols-3">
-        <div className="rounded-xl border border-amber-900/40 bg-black/20 p-4"><div className="text-xs uppercase text-amber-400">Current Record King</div><div className="mt-1 text-xl font-black text-white">{recordKing?.name ?? '—'}</div><div className="text-sm text-neutral-500">{recordKing ? `${recordKing.records.length} current records` : 'No records yet'}</div></div>
-        <div className="rounded-xl border border-purple-900/40 bg-black/20 p-4"><div className="text-xs uppercase text-purple-400">Latest Record Broken</div><div className="mt-1 text-xl font-black text-white">{latestRecord?.name ?? '—'}</div><div className="text-sm text-neutral-500">{latestRecord ? `${fmt(latestRecord.value)} ${latestRecord.category} · ${fmtDate(latestRecord.date)}` : 'No proven event yet'}</div></div>
+        <div className="rounded-xl border border-amber-900/40 bg-black/20 p-4"><div className="text-xs uppercase text-amber-400">Current Record {recordKings.length === 1 ? 'King' : 'Leaders'}</div><div className="mt-1 text-xl font-black text-white">{recordKings.length ? recordKings.map((entry) => entry.name).join(' · ') : '—'}</div><div className="text-sm text-neutral-500">{recordKings.length ? `${recordKings[0].records.length} current records each` : 'No records yet'}</div></div>
+        <div className="rounded-xl border border-purple-900/40 bg-black/20 p-4"><div className="text-xs uppercase text-purple-400">Latest Record Activity</div><div className="mt-1 text-xl font-black text-white">{latestRecord ? fmtDate(latestRecord.date) : '—'}</div><div className="text-sm text-neutral-500">{latestRecord ? `${latestActivity.length} new mark${latestActivity.length === 1 ? '' : 's'} · same-day activity grouped` : 'No proven event yet'}</div></div>
         <div className="rounded-xl border border-neutral-700 bg-black/20 p-4"><div className="text-xs uppercase text-neutral-500">Historical Standard</div><div className="mt-1 font-bold text-white">Date-safe progression</div><div className="text-sm text-neutral-500">No assumed same-day ordering</div></div>
       </div>
     </header>
@@ -296,7 +303,7 @@ export default async function Records({ searchParams }: { searchParams: Promise<
     <nav className="sticky top-0 z-20 -mx-4 mb-12 overflow-x-auto border-y border-neutral-800 bg-[#0b0b0b]/95 px-4 py-3 backdrop-blur md:mx-0 md:rounded-xl md:border">
       <div className="flex min-w-max gap-5 text-xs font-bold uppercase tracking-wider text-neutral-500">{[['overview','Overview'],['career','Career'],['game','Game'],['series','Series'],['team','Team'],['process','Process'],['history','History']].map(([id,label]) => <a key={id} href={`#${id}`} className="hover:text-purple-300">{label}</a>)}</div>
     </nav>
-    <section id="overview" className="mb-16 scroll-mt-20"><Heading overline="Latest milestones" title="Recent Record Activity" copy="Only meaningful new marks proven with date-level chronology. Same-day intra-event order is never inferred." /><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{timeline.slice(0,6).map((e) => <article key={`${e.category}-${e.id}`} className="rounded-2xl border border-purple-900/40 bg-[#111] p-5"><div className="text-xs font-black text-amber-400">NEW ORG RECORD</div><div className="mt-2 text-sm text-neutral-500">{e.category}</div><div className="mt-1 text-3xl font-black text-white">{fmt(e.value)} · {e.name}</div><div className="mt-3 text-sm text-neutral-400">{e.team} · {e.format}<br/>vs {e.opponent} · {fmtDate(e.date)}</div>{e.previousValue !== undefined && <div className="mt-4 border-t border-neutral-800 pt-3 text-xs text-neutral-500">Previous record: {fmt(e.previousValue)}{e.previousNames?.length ? ` · ${e.previousNames.join(', ')}` : ''}<br/><span className="text-amber-400">+{fmt(e.value-e.previousValue)} over previous mark</span></div>}</article>)}</div></section>
+    <section id="overview" className="mb-16 scroll-mt-20"><Heading overline="Latest milestones" title="Recent Record Activity" copy="Only meaningful new marks proven with date-level chronology. Same-day intra-event order is never inferred." /><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{timeline.slice(0,6).map((e) => <article key={`${e.category}-${e.id}`} className="rounded-2xl border border-purple-900/40 bg-[#111] p-5"><div className="text-xs font-black text-amber-400">NEW ORG RECORD</div><div className="mt-2 text-sm text-neutral-500">{e.category}</div><div className="mt-1 text-3xl font-black text-white">{fmt(e.value)} · {e.name}</div><div className="mt-3 text-sm text-neutral-400">{e.team} · {e.format}<br/>vs {e.opponent} · {fmtDate(e.date)}</div>{e.jointNames.length > 1 && <div className="mt-2 text-xs text-purple-300">Joint same-day record</div>}{e.previousValue !== undefined && <div className="mt-4 border-t border-neutral-800 pt-3 text-xs text-neutral-500">Previous record: {fmt(e.previousValue)}{e.previousNames?.length ? ` · ${e.previousNames.join(', ')}` : ''}<br/><span className="text-amber-400">+{fmt(e.value-e.previousValue)} over previous mark</span></div>}</article>)}</div></section>
     <section className="mb-16"><Heading overline="Current ownership" title="Record Holders" copy="Current positive-value records only. Joint holders each receive credit." /><div className="rounded-2xl border border-neutral-800 bg-[#111] p-5">{recordHolders.slice(0,10).map((entry,index) => <details key={entry.name} className="border-t border-neutral-800 py-3 first:border-0"><summary className="cursor-pointer list-none"><span className="mr-3 font-mono text-neutral-600">{index+1}</span><Link href={`/players/${encodeURIComponent(entry.name)}`} className="font-bold text-white hover:underline">{entry.name}</Link><span className="float-right text-purple-300">{entry.records.length} records</span></summary><ul className="mt-3 ml-8 space-y-1 text-sm text-neutral-500">{entry.records.map((record) => <li key={record}>• {record}</li>)}</ul></details>)}</div></section>
     <section id="career" className="mb-16 scroll-mt-20"><Heading overline="All-time totals & rates" title="Career Leaders" copy={`Competition-ranked top three. Rate eligibility is ${threshold} GP; forfeits are excluded.`} />{grid(careerRecords)}</section>
     <section id="game" className="mb-16 scroll-mt-20"><Heading overline="Peak · single game" title="Single-Game Records" copy="Every legitimate tie is retained; repeated tied performances expand on demand." />{grid(gameRecords)}</section>
@@ -305,6 +312,6 @@ export default async function Records({ searchParams }: { searchParams: Promise<
     <section id="process" className="mb-16 scroll-mt-20"><Heading overline="Process · Ballchasing analytics" title="Process Records" copy="Ranked independently by format. NULL advanced fields never become zero." />
       <div className="mb-6 grid gap-4 md:grid-cols-2"><div className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs font-bold uppercase text-neutral-500">Basic Tracking</div><div className="mt-2 text-3xl font-black text-white">{basic} / {stats.length}</div><div className="text-purple-300">{percent(avg(basic*100,stats.length))}</div><p className="mt-3 text-sm text-neutral-500">BPM · Avg Speed · Demos · Boost</p></div><div className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs font-bold uppercase text-neutral-500">Advanced Tracking</div><div className="mt-2 text-3xl font-black text-white">{advanced} / {stats.length}</div><div className="text-purple-300">{percent(avg(advanced*100,stats.length))}</div><p className="mt-3 text-sm text-neutral-500">Supersonic · Air Time · Positioning · Zero Boost</p><p className="mt-2 text-xs text-neutral-600">Historical advanced tracking backfill in progress.</p></div></div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{process.map((r) => <article key={`${r.format}-${r.skill.key}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="flex justify-between gap-3"><div><div className="text-xs font-bold uppercase text-neutral-500">{r.format}</div><h3 className="mt-1 font-bold text-white">{r.skill.key === 'bpm' ? 'Career Avg BPM' : r.skill.key === 'avgSpeed' ? 'Career Avg Speed' : r.skill.label}</h3></div><div className="text-2xl font-black text-[#AF69EE]">{r.value}</div></div><div className="mt-5 space-y-2">{r.gold.length ? r.gold.map((h) => <div key={h.playerId}><Link href={`/players/${encodeURIComponent(h.name)}`} className="font-bold text-white hover:underline">{h.name}</Link><div className="text-xs text-neutral-500">{h.team} · {h.games} GP · eligible</div></div>) : <p className="text-sm text-neutral-600">No eligible tracked sample yet.</p>}</div><p className="mt-4 border-t border-neutral-800 pt-3 text-xs text-neutral-600">Minimum: {r.threshold} GP. {r.skill.key === 'zeroBoostPct' ? 'Lower is better.' : r.skill.key === 'positioningDepth' ? 'Descriptive only: higher means deeper.' : r.skill.description}</p></article>)}</div></section>
-    <section id="history" className="scroll-mt-20"><Heading overline="History · date-safe progression" title="Record Evolution" copy="Major positive record changes grouped by calendar date. Ties and same-day pseudo-sequences are omitted from the default history." /><div className="ml-3 border-l border-purple-900/60 pl-6">{timeline.slice(0,30).map((e) => <article key={`t-${e.category}-${e.id}`} className="relative mb-4 rounded-xl border border-neutral-800 bg-[#111] p-4"><div className="absolute -left-[31px] top-5 h-3 w-3 rounded-full bg-purple-500"/><div className="text-xs text-neutral-600">{fmtDate(e.date)} · NEW RECORD</div><div className="mt-1 font-bold text-white">{e.category}: {fmt(e.value)}</div><Link href={`/players/${encodeURIComponent(e.name)}`} className="text-sm text-purple-300 hover:underline">{e.name}</Link><div className="mt-1 text-sm text-neutral-500">vs {e.opponent} · {e.team} · {e.format}</div>{e.previousValue !== undefined && <div className="mt-2 text-xs text-neutral-600">Previous: {fmt(e.previousValue)}{e.previousNames?.length ? ` · ${e.previousNames.join(', ')}` : ''} · +{fmt(e.value-e.previousValue)}</div>}</article>)}</div></section>
+    <section id="history" className="scroll-mt-20"><Heading overline="History · date-safe progression" title="Record Evolution" copy="Major positive record changes grouped by calendar date. Ties on the same date are credited jointly." /><div className="ml-3 border-l border-purple-900/60 pl-6">{timeline.slice(0,30).map((e) => <article key={`t-${e.category}-${e.id}`} className="relative mb-4 rounded-xl border border-neutral-800 bg-[#111] p-4"><div className="absolute -left-[31px] top-5 h-3 w-3 rounded-full bg-purple-500"/><div className="text-xs text-neutral-600">{fmtDate(e.date)} · NEW RECORD</div><div className="mt-1 font-bold text-white">{e.category}: {fmt(e.value)}</div><div className="text-sm text-purple-300">{e.jointNames.map((name, index) => <span key={name}>{index > 0 ? ' · ' : ''}<Link href={`/players/${encodeURIComponent(name)}`} className="hover:underline">{name}</Link></span>)}</div><div className="mt-1 text-sm text-neutral-500">vs {e.opponent} · {e.team} · {e.format}</div>{e.previousValue !== undefined && <div className="mt-2 text-xs text-neutral-600">Previous: {fmt(e.previousValue)}{e.previousNames?.length ? ` · ${e.previousNames.join(', ')}` : ''} · +{fmt(e.value-e.previousValue)}</div>}</article>)}</div></section>
   </main>
 }

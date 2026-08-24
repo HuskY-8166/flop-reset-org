@@ -12,6 +12,8 @@ import {
   rankProcessSkill,
   formatProcessSkillValue,
 } from '@/lib/processSkills'
+import { getGameOutcome } from '@/lib/results'
+import { PlayerTrendChart } from '@/components/PlayerTrendChart'
 
 export const dynamic = 'force-dynamic'
 
@@ -889,20 +891,6 @@ export default async function PlayerProfile({
         player.player_id
     )
 
-  const playerById =
-    new Map<
-      number,
-      PlayerRow
-    >()
-
-  playerRows.forEach(
-    (player) =>
-      playerById.set(
-        player.player_id,
-        player
-      )
-  )
-
   // ---------------------------------------------------------------------------
   // FORMATS
   // ---------------------------------------------------------------------------
@@ -981,14 +969,11 @@ export default async function PlayerProfile({
       zero_boost_pct,
 
       matches (
-        match_date,
-        opponent_name,
-        flop_reset_score,
-        opponent_score,
-        series_id,
-        replay_id,
-        round,
-        is_forfeit
+        *,
+        teams (
+          name,
+          format
+        )
       )
     `)
     .in(
@@ -1009,12 +994,7 @@ export default async function PlayerProfile({
     Array.from(
       new Set(
         allPlayerStats
-          .map((stat: any) =>
-            playerById.get(
-              Number(stat.player_id)
-            )?.teams?.format ??
-            ''
-          )
+          .map((stat: any) => stat.matches?.teams?.format ?? '')
           .filter(Boolean)
       )
     )
@@ -1027,7 +1007,7 @@ export default async function PlayerProfile({
       ? requestedFormat
       : 'All'
 
-  const stats =
+  const selectedStats =
     allPlayerStats.filter(
       (stat: any) => {
         if (
@@ -1037,46 +1017,30 @@ export default async function PlayerProfile({
           return true
         }
 
-        const identity =
-          playerById.get(
-            Number(
-              stat.player_id
-            )
-          )
-
         return (
-          identity?.teams
+          stat.matches?.teams
             ?.format ===
           selectedFormat
         )
       }
     )
 
-  const selectedPlayerRows =
-    playerRows.filter(
-      (player) =>
-        selectedFormat === 'All'
-          ? allPlayerStats.some(
-              (stat: any) =>
-                Number(stat.player_id) ===
-                player.player_id
-            )
-          : player.teams
-              ?.format ===
-            selectedFormat
-    )
+  // Box-score and Process metrics must never turn a forfeit into a fabricated
+  // performance. Result records below still use selectedStats so an explicitly
+  // attributed forfeit can count as a W/L without contributing goals or shots.
+  const stats = selectedStats.filter((stat: any) => !stat.matches?.is_forfeit)
 
   const teamLabels =
     Array.from(
       new Set(
-        selectedPlayerRows.map(
-          (player) =>
+        selectedStats.map(
+          (stat: any) =>
             `${
-              player.teams
+              stat.matches?.teams
                 ?.name ??
               'Unknown'
             } (${
-              player.teams
+              stat.matches?.teams
                 ?.format ??
               'Unknown'
             })`
@@ -1203,50 +1167,17 @@ export default async function PlayerProfile({
   // GAME RECORD
   // ---------------------------------------------------------------------------
 
-  const wins =
-    stats.filter(
-      (stat: any) =>
-        numberValue(
-          stat.matches
-            ?.flop_reset_score
-        ) >
-        numberValue(
-          stat.matches
-            ?.opponent_score
-        )
-    )
+  const wins = selectedStats.filter((stat: any) => getGameOutcome(stat.matches).result === 'W')
 
-  const losses =
-    stats.filter(
-      (stat: any) =>
-        numberValue(
-          stat.matches
-            ?.flop_reset_score
-        ) <
-        numberValue(
-          stat.matches
-            ?.opponent_score
-        )
-    )
+  const losses = selectedStats.filter((stat: any) => getGameOutcome(stat.matches).result === 'L')
 
-  const ties =
-    stats.filter(
-      (stat: any) =>
-        numberValue(
-          stat.matches
-            ?.flop_reset_score
-        ) ===
-        numberValue(
-          stat.matches
-            ?.opponent_score
-        )
-    )
+  const ties = selectedStats.filter((stat: any) => getGameOutcome(stat.matches).result === 'T')
 
   const winRate =
-    totals.games > 0
+    selectedStats.length > 0
       ? (
           wins.length /
-          totals.games
+          selectedStats.length
         ) * 100
       : 0
 
@@ -1325,7 +1256,10 @@ export default async function PlayerProfile({
       zero_boost_pct,
 
       players (
-        name,
+        name
+      ),
+      matches (
+        is_forfeit,
         teams (
           name,
           format
@@ -1341,7 +1275,8 @@ export default async function PlayerProfile({
       []).filter(
       (stat: any) =>
         hasFormatSpecificRankings &&
-        stat.players
+        !stat.matches?.is_forfeit &&
+        stat.matches
           ?.teams
           ?.format ===
           selectedFormat
@@ -1399,7 +1334,7 @@ export default async function PlayerProfile({
             ?.name ??
             'Unknown',
 
-          first.players
+          first.matches
             ?.teams
             ?.name ??
             'Unknown',
@@ -1572,6 +1507,15 @@ export default async function PlayerProfile({
       recentFive.length
     )
 
+  const trendPoints = chronological.slice(-12).map((stat: any) => ({
+    id: numberValue(stat.match_id),
+    date: String(stat.matches?.match_date ?? '').slice(0, 10),
+    opponent: stat.matches?.opponent_name ?? 'Unknown',
+    goals: numberValue(stat.goals),
+    assists: numberValue(stat.assists),
+    saves: numberValue(stat.saves),
+  }))
+
   // ---------------------------------------------------------------------------
   // OPPONENT SPLITS
   // ---------------------------------------------------------------------------
@@ -1590,7 +1534,7 @@ export default async function PlayerProfile({
       }
     >()
 
-  stats.forEach(
+  selectedStats.forEach(
     (stat: any) => {
       const opponent =
         stat.matches
@@ -1623,44 +1567,20 @@ export default async function PlayerProfile({
 
       row.games++
 
-      row.goals +=
-        numberValue(
-          stat.goals
-        )
+      if (!stat.matches?.is_forfeit) {
+        row.goals += numberValue(stat.goals)
 
-      row.assists +=
-        numberValue(
-          stat.assists
-        )
+        row.assists += numberValue(stat.assists)
 
-      row.saves +=
-        numberValue(
-          stat.saves
-        )
+        row.saves += numberValue(stat.saves)
+      }
 
-      const ourScore =
-        numberValue(
-          stat.matches
-            ?.flop_reset_score
-        )
-
-      const theirScore =
-        numberValue(
-          stat.matches
-            ?.opponent_score
-        )
-
-      if (
-        ourScore >
-        theirScore
-      ) {
+      const outcome = getGameOutcome(stat.matches)
+      if (outcome.result === 'W') {
         row.wins++
       }
 
-      if (
-        ourScore <
-        theirScore
-      ) {
+      if (outcome.result === 'L') {
         row.losses++
       }
     }
@@ -1699,7 +1619,9 @@ export default async function PlayerProfile({
       }
     >()
 
-  chronological.forEach(
+  const resultChronological = [...selectedStats].sort((a: any, b: any) => String(a.matches?.match_date ?? '').localeCompare(String(b.matches?.match_date ?? '')) || numberValue(a.match_id) - numberValue(b.match_id))
+
+  resultChronological.forEach(
     (stat: any) => {
       const rawSeriesId =
         stat.matches
@@ -1714,13 +1636,6 @@ export default async function PlayerProfile({
               rawSeriesId
             )
           : `match-${stat.match_id}`
-
-      const identity =
-        playerById.get(
-          Number(
-            stat.player_id
-          )
-        )
 
       if (
         !seriesMap.has(
@@ -1745,8 +1660,7 @@ export default async function PlayerProfile({
               'Unknown',
 
             format:
-              identity
-                ?.teams
+              stat.matches?.teams
                 ?.format ??
               '',
 
@@ -1773,54 +1687,20 @@ export default async function PlayerProfile({
         stat
       )
 
-      series.goals +=
-        numberValue(
-          stat.goals
-        )
+      if (!stat.matches?.is_forfeit) {
+        series.goals += numberValue(stat.goals)
+        series.assists += numberValue(stat.assists)
+        series.saves += numberValue(stat.saves)
+        series.shots += numberValue(stat.shots)
+        series.score += numberValue(stat.score)
+      }
 
-      series.assists +=
-        numberValue(
-          stat.assists
-        )
-
-      series.saves +=
-        numberValue(
-          stat.saves
-        )
-
-      series.shots +=
-        numberValue(
-          stat.shots
-        )
-
-      series.score +=
-        numberValue(
-          stat.score
-        )
-
-      const ourScore =
-        numberValue(
-          stat.matches
-            ?.flop_reset_score
-        )
-
-      const theirScore =
-        numberValue(
-          stat.matches
-            ?.opponent_score
-        )
-
-      if (
-        ourScore >
-        theirScore
-      ) {
+      const outcome = getGameOutcome(stat.matches)
+      if (outcome.result === 'W') {
         series.gameWins++
       }
 
-      if (
-        ourScore <
-        theirScore
-      ) {
+      if (outcome.result === 'L') {
         series.gameLosses++
       }
     }
@@ -2685,6 +2565,8 @@ export default async function PlayerProfile({
           </div>
         </div>
       </section>
+
+      <PlayerTrendChart points={trendPoints} />
 
       {/* CAREER HIGHS */}
 

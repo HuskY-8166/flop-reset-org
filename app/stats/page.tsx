@@ -151,7 +151,10 @@ export default function Stats() {
           zero_boost_pct,
 
           players (
-            name,
+            name
+          ),
+          matches (
+            is_forfeit,
             teams (
               name,
               format
@@ -166,20 +169,23 @@ export default function Stats() {
         return
       }
 
-      const byPlayer: Record<number, AggregateRow> = {}
+      const byPlayer: Record<string, AggregateRow> = {}
 
       full?.forEach((stat: any) => {
         const pid = Number(stat.player_id)
+        const historicalTeam = stat.matches?.teams
 
-        if (!pid) return
+        if (!pid || stat.matches?.is_forfeit) return
 
-        if (!byPlayer[pid]) {
-          byPlayer[pid] = {
+        const aggregateKey = `${pid}|${historicalTeam?.name ?? 'Unknown'}|${historicalTeam?.format ?? 'Unknown'}`
+
+        if (!byPlayer[aggregateKey]) {
+          byPlayer[aggregateKey] = {
             playerId: pid,
 
             name: stat.players?.name ?? 'Unknown',
-            team: stat.players?.teams?.name ?? '',
-            format: stat.players?.teams?.format ?? '',
+            team: historicalTeam?.name ?? '',
+            format: historicalTeam?.format ?? '',
 
             games: 0,
 
@@ -264,7 +270,7 @@ export default function Stats() {
           }
         }
 
-        const row = byPlayer[pid]
+        const row = byPlayer[aggregateKey]
 
         // -------------------------------------------------------------------
         // Box-score stats
@@ -426,7 +432,11 @@ export default function Stats() {
         }
       })
 
-      const finishedRows: Row[] = Object.values(byPlayer).map((row) => {
+      const finishedRows: Row[] = Object.values(byPlayer).map((row, index) => {
+        // The domain identity is player + historical team + format. The numeric
+        // key is local to this rendered leaderboard and avoids collisions when
+        // one player appears for multiple squads or formats.
+        row.playerId = index + 1
         // -------------------------------------------------------------------
         // Average only games where that stat actually existed
         // -------------------------------------------------------------------

@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from '@/lib/supabase'
+import { formatPublicDate, getSeriesOutcome } from '@/lib/results'
 
 export const dynamic = 'force-dynamic'
 
@@ -12,7 +13,7 @@ export default async function Schedule() {
 
   const { data: history } = await supabase
     .from('series')
-    .select('series_id, opponent_name, series_date, teams ( name, format ), matches ( flop_reset_score, opponent_score, is_forfeit )')
+    .select('series_id, opponent_name, series_date, teams ( name, format ), matches ( * )')
     .order('series_date', { ascending: false })
 
   return (
@@ -34,7 +35,7 @@ export default async function Schedule() {
               <span className="text-sm text-neutral-400">{(m.competitions as any)?.name}</span>
             </div>
             <p className="text-neutral-300">
-              {m.match_date} {m.match_time && `— ${m.match_time}`}
+              {formatPublicDate(m.match_date)} {m.match_time && `— ${m.match_time}`}
             </p>
             {m.notes && <p className="text-neutral-500 text-sm mt-1">{m.notes}</p>}
           </div>
@@ -50,17 +51,15 @@ export default async function Schedule() {
             <p className="text-neutral-500">No past matches yet.</p>
           )}
           {history?.map((s) => {
-            const gamesWon = (s.matches as any)?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-            const gamesLost = (s.matches as any)?.filter((m: any) => m.flop_reset_score < m.opponent_score).length ?? 0
-            const result = gamesWon > gamesLost ? 'W' : 'L'
+            const outcome = getSeriesOutcome((s.matches as any[]) ?? [])
             return (
               <a href={`/matches/${s.series_id}`} key={s.series_id} className="block rounded-xl bg-[#111] border border-neutral-800 p-5 no-underline hover:bg-neutral-900">
                 <div className="flex items-baseline justify-between mb-1">
                   <h2 className="text-xl font-bold">
-                    {(s.teams as any)?.name} ({(s.teams as any)?.format}) vs {s.opponent_name} — {result} ({gamesWon}-{gamesLost})
+                    {(s.teams as any)?.name} ({(s.teams as any)?.format}) vs {s.opponent_name} — {outcome.result} ({outcome.displayRecord})
                   </h2>
                 </div>
-                <p className="text-neutral-300">{s.series_date}</p>
+                <p className="text-neutral-300">{formatPublicDate(s.series_date)}</p>
               </a>
             )
           })}

@@ -21,7 +21,7 @@ function kForMatchCount(n: number) {
 
 export function calculateElo(matches: LeagueMatch[]) {
   const completed = matches
-    .filter((m) => m.status === 'completed' && m.team_b && m.score_a !== 'FFW' && m.score_a !== 'FFL')
+    .filter((m) => m.status === 'completed' && m.team_b && m.score_a != null && m.score_b != null)
     .sort((a, b) => new Date(a.match_date).getTime() - new Date(b.match_date).getTime())
 
   const ratings: Record<string, number> = {}
@@ -101,7 +101,7 @@ export function calculateElo(matches: LeagueMatch[]) {
 
 export function calculateEloWithHistory(matches: LeagueMatch[]) {
   const completed = matches
-    .filter((m) => m.status === 'completed' && m.team_b && m.score_a !== 'FFW' && m.score_a !== 'FFL')
+    .filter((m) => m.status === 'completed' && m.team_b && m.score_a != null && m.score_b != null)
     .map((m) => ({ ...m, roundNum: parseInt(m.round.replace(/\D/g, '')) || 0 }))
     .sort((a, b) => a.roundNum - b.roundNum || new Date(a.match_date).getTime() - new Date(b.match_date).getTime())
 
@@ -109,6 +109,7 @@ export function calculateEloWithHistory(matches: LeagueMatch[]) {
   const tierOf: Record<string, string> = {}
   const matchCounts: Record<string, number> = {}
   const history: Record<string, { round: number; rating: number; delta: number }[]> = {}
+  const giantKillerPoints: Record<string, number> = {}
 
   function getRating(team: string, tier: string) {
     if (!(team in ratings)) {
@@ -175,6 +176,11 @@ export function calculateEloWithHistory(matches: LeagueMatch[]) {
       matchCounts[b] = nB
       history[a].push({ round: roundNum, rating: ratings[a], delta: deltaA })
       history[b].push({ round: roundNum, rating: ratings[b], delta: deltaB })
+
+      // Credit only a real upset, using the rating gap before this match. A
+      // forfeit may affect Elo at half K but never creates a Giant Killer mark.
+      if (!isForfeit && sA === 1 && ra < rb) giantKillerPoints[a] = (giantKillerPoints[a] ?? 0) + (rb - ra)
+      if (!isForfeit && sA === 0 && rb < ra) giantKillerPoints[b] = (giantKillerPoints[b] ?? 0) + (ra - rb)
     })
 
     const snapshot = Object.keys(ratings).map((team) => ({
@@ -204,7 +210,7 @@ export function calculateEloWithHistory(matches: LeagueMatch[]) {
     const currentSnap = roundSnapshots[latestRound]?.find((s) => s.team === team)
     const prevSnap = prevRound !== undefined ? roundSnapshots[prevRound]?.find((s) => s.team === team) : undefined
     const rankMove = prevSnap && currentSnap ? prevSnap.overallRank - currentSnap.overallRank : 0
-    const lastDelta = h[h.length - 1]?.delta ?? 0
+    const lastRoundDelta = h.filter((entry) => entry.round === latestRound).reduce((total, entry) => total + entry.delta, 0)
 
     return {
       team,
@@ -213,16 +219,14 @@ export function calculateEloWithHistory(matches: LeagueMatch[]) {
       overallRank: currentSnap?.overallRank ?? null,
       tierRank: currentSnap?.tierRank ?? null,
       rankMove,
-      lastRoundDelta: lastDelta,
+      lastRoundDelta,
       peak: Math.max(...ratingsOnly),
       worst: Math.min(...ratingsOnly),
       matchesTracked: matchCounts[team] || 0,
       bestMatch: deltasOnly.length ? Math.max(...deltasOnly) : 0,
       worstMatch: deltasOnly.length ? Math.min(...deltasOnly) : 0,
-      teamOfRoundScore: 2 * rankMove + lastDelta + 0.02 * ratings[team],
-      giantKillerScore: currentSnap
-        ? (parseInt(tierOf[team].replace(/\D/g, '')) || 0) - (currentSnap.overallRank / totalTeams) * 7
-        : -999,
+      teamOfRoundScore: 2 * rankMove + lastRoundDelta + 0.02 * ratings[team],
+      giantKillerScore: giantKillerPoints[team] ?? 0,
     }
   })
 

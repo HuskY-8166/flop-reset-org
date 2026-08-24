@@ -21,7 +21,7 @@ function kForMatchCount(n: number) {
 
 export function calculateElo(matches: LeagueMatch[]) {
   const completed = matches
-    .filter((m) => m.status === 'completed' && m.team_b)
+    .filter((m) => m.status === 'completed' && m.team_b && m.score_a !== 'FFW' && m.score_a !== 'FFL')
     .sort((a, b) => new Date(a.match_date).getTime() - new Date(b.match_date).getTime())
 
   const ratings: Record<string, number> = {}
@@ -101,7 +101,7 @@ export function calculateElo(matches: LeagueMatch[]) {
 
 export function calculateEloWithHistory(matches: LeagueMatch[]) {
   const completed = matches
-    .filter((m) => m.status === 'completed' && m.team_b)
+    .filter((m) => m.status === 'completed' && m.team_b && m.score_a !== 'FFW' && m.score_a !== 'FFL')
     .map((m) => ({ ...m, roundNum: parseInt(m.round.replace(/\D/g, '')) || 0 }))
     .sort((a, b) => a.roundNum - b.roundNum || new Date(a.match_date).getTime() - new Date(b.match_date).getTime())
 

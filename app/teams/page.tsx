@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/static-components */
 import { supabase } from '@/lib/supabase'
 export const dynamic = 'force-dynamic'
 
@@ -25,12 +26,13 @@ export default async function Teams() {
   function TeamGrid({ list }: { list: typeof teams3v3 }) {
     return (
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+        {list.length === 0 && <div className="col-span-full rounded-xl border border-neutral-800 bg-[#111] p-5 text-sm text-neutral-500">No teams are registered in this format yet.</div>}
         {list.map((team) => (
           <div
             key={team.id}
             id={team.name}
             style={{ borderTopColor: colors[team.name] ?? '#666' }}
-            className="rounded-xl border-t-4 bg-neutral-900 p-6 hover:bg-neutral-800 transition-colors"
+            className="rounded-xl border border-neutral-800 border-t-4 bg-[#111] p-6 hover:-translate-y-0.5 hover:bg-neutral-900 transition-all"
           >
             <div className="flex items-baseline justify-between mb-1">
 <h2 className="text-2xl font-bold">
@@ -57,9 +59,8 @@ export default async function Teams() {
   }
 
   return (
-    <main className="px-8 py-12 max-w-6xl mx-auto">
-      <h1 className="text-4xl font-bold mb-2">Our <span style={{ color: '#AF69EE' }}>Teams</span></h1>
-      <p className="text-neutral-400 mb-10">Meet the squads competing under Flop Reset</p>
+    <main className="px-4 py-10 md:px-8 md:py-14 max-w-6xl mx-auto">
+      <div className="mb-10 rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9"><div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">Competitive squads</div><h1 className="mt-2 text-4xl font-bold md:text-6xl">Our <span style={{ color: '#AF69EE' }}>Teams</span></h1><p className="mt-2 text-neutral-400">Meet the players representing Flop Reset in each recorded format.</p></div>
       {error && <p>Error: {error.message}</p>}
 
       <h2 className="text-xl font-semibold text-neutral-300 mb-4 border-b border-neutral-800 pb-2">3v3</h2>

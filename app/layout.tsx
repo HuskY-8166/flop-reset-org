@@ -2,6 +2,7 @@
 
 import { Geist, Geist_Mono, Rajdhani, Teko } from "next/font/google";
 import { usePathname } from "next/navigation";
+import Link from "next/link";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -25,13 +26,13 @@ const teko = Teko({
 
 const links = [
   { href: "/", label: "Home" },
-  { href: "/schedule", label: "Schedule" },
   { href: "/teams", label: "Teams" },
-  { href: "/standings", label: "Standings" },
-  { href: "/power-rankings", label: "Power Rankings" },
   { href: "/stats", label: "Stats" },
+  { href: "/power-rankings", label: "Power" },
   { href: "/records", label: "Records" },
-  { href: "/rivalries", label: "Rivalries" },
+  { href: "/matches", label: "Results" },
+  { href: "/schedule", label: "Schedule" },
+  { href: "/rivalries", label: "History" },
 ];
 
 export default function RootLayout({
@@ -47,17 +48,19 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} ${rajdhani.variable} ${teko.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <nav style={{ padding: '1rem 2rem', borderBottom: '1px solid #262626', display: 'flex', gap: '1.5rem', backgroundColor: '#111' }}>
-          {links.map((link) => (
-            <a
-              key={link.href}
-              href={link.href}
-              className={pathname === link.href ? 'text-white font-semibold border-b-2 pb-1' : 'text-blue-400 hover:text-white'}
-              style={pathname === link.href ? { borderColor: '#AF69EE' } : undefined}
-            >
-              {link.label}
-            </a>
-          ))}
+        <nav className="sticky top-0 z-50 border-b border-neutral-800 bg-[#0d0d0d]/95 backdrop-blur" aria-label="Primary navigation">
+          <div className="mx-auto flex max-w-7xl items-center gap-5 overflow-x-auto px-4 py-3 md:px-8">
+            <Link href="/" className="mr-2 min-w-max text-sm font-black tracking-wider text-white no-underline">
+              FLOP <span className="text-purple-400">RESET</span>
+            </Link>
+            {links.map((link) => {
+              const active = link.href === '/' ? pathname === '/' : pathname.startsWith(link.href)
+              return <Link key={link.href} href={link.href} aria-current={active ? 'page' : undefined}
+                className={`min-w-max rounded-md px-2 py-1 text-sm font-semibold no-underline transition-colors ${active ? 'bg-purple-950 text-purple-200' : 'text-neutral-400 hover:bg-neutral-900 hover:text-white'}`}>
+                {link.label}
+              </Link>
+            })}
+          </div>
         </nav>
         {children}
       </body>

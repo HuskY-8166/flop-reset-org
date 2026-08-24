@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from '@/lib/supabase'
 import { calculateEloWithHistory } from '@/lib/elo'
 export const dynamic = 'force-dynamic'
@@ -18,13 +19,11 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
     .select('round, tier, team_a, team_b, score_a, score_b, status, match_date')
     .eq('format', activeFormat)
 
-  const { roundSnapshots, teamSummaries, rounds, totalTeams } = matches
+  const { teamSummaries, rounds } = matches
     ? calculateEloWithHistory(matches as any)
-    : { roundSnapshots: {}, teamSummaries: [], rounds: [], totalTeams: 0 }
+    : { teamSummaries: [], rounds: [] }
 
   const latestRound = rounds[rounds.length - 1]
-  const latestSnapshot = roundSnapshots[latestRound] || []
-
   const flopSummaries = teamSummaries.filter((t) => FLOP_TEAMS.includes(t.team))
   const others = teamSummaries.filter((t) => !FLOP_TEAMS.includes(t.team) && t.overallRank !== null)
 
@@ -49,13 +48,17 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
   }
 
   return (
-    <main className="px-8 py-12 max-w-7xl mx-auto">
-      <h1 className="text-6xl font-black tracking-tight mb-2">Power <span style={{ color: '#AF69EE' }}>Rankings</span></h1>
-      <p className="text-neutral-400 mb-6">Live Elo, calculated from real match results — Round {latestRound ?? '—'}</p>
+    <main className="px-4 py-10 md:px-8 md:py-14 max-w-7xl mx-auto">
+      <div className="rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9 mb-8">
+        <div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">Competitive form</div>
+        <h1 className="text-4xl md:text-6xl font-black tracking-tight mt-2">Power <span style={{ color: '#AF69EE' }}>Rankings</span></h1>
+        <p className="text-neutral-400 mt-2 max-w-3xl">Elo-based team strength from completed, non-forfeit league results. Ratings update after each tracked result and remain separated by format.</p>
+        <div className="mt-4 text-sm text-neutral-500">Latest completed round: <span className="font-semibold text-white">{latestRound ?? 'Not available'}</span></div>
+      </div>
 
-      <div className="flex gap-4 mb-10">
-        <a href="?format=3v3" className={activeFormat === '3v3' ? 'text-white font-semibold underline' : 'text-blue-400'}>3v3</a>
-        <a href="?format=2v2" className={activeFormat === '2v2' ? 'text-white font-semibold underline' : 'text-blue-400'}>2v2</a>
+      <div className="flex gap-2 mb-10">
+        <a href="?format=3v3" className={`rounded-full px-4 py-2 text-sm font-semibold no-underline ${activeFormat === '3v3' ? 'bg-purple-700 text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>3v3</a>
+        <a href="?format=2v2" className={`rounded-full px-4 py-2 text-sm font-semibold no-underline ${activeFormat === '2v2' ? 'bg-purple-700 text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>2v2</a>
       </div>
 
       {error && <p>Error: {error.message}</p>}
@@ -66,8 +69,8 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
           <h2 className="text-2xl font-bold mb-4">Flop Reset Spotlight</h2>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12">
             {flopSummaries.map((t) => (
-              <div key={t.team} className="rounded-xl bg-purple-950 border border-purple-700 p-5">
-                <div className="font-bold text-lg mb-3">{t.team}</div>
+              <div key={t.team} className="rounded-xl bg-purple-950/40 border border-purple-800 p-5">
+                <a href={`/teams/${encodeURIComponent(FLOP_TEAM_SLUGS[t.team])}`} className="font-bold text-lg mb-3 inline-block text-white hover:underline">{t.team}</a>
                 <div className="grid grid-cols-2 gap-3 text-sm">
                   <div>
                     <div className="text-neutral-400">Overall Rank</div>
@@ -162,7 +165,7 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
                     >
                       <span className={isUs ? 'font-bold text-purple-300' : 'text-neutral-300'}>
                         {i + 1}. {isUs ? (
-                          <a href={`/teams#${encodeURIComponent(FLOP_TEAM_SLUGS[r.team])}`} className="hover:underline">
+                          <a href={`/teams/${encodeURIComponent(FLOP_TEAM_SLUGS[r.team])}`} className="hover:underline">
                             {r.team}
                           </a>
                         ) : r.team}
@@ -178,6 +181,16 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
           </div>
         ))}
       </div>
+
+      <details className="mt-12 rounded-2xl border border-neutral-800 bg-[#111111] p-5">
+        <summary className="cursor-pointer font-bold text-white">How the rating works</summary>
+        <div className="mt-4 grid gap-4 text-sm text-neutral-400 md:grid-cols-2">
+          <p><strong className="text-white">What raises a rating:</strong> beating a higher-rated opponent and winning by more than the typical margin for that tier and round.</p>
+          <p><strong className="text-white">What lowers a rating:</strong> losing—especially to a lower-rated opponent. Early matches move ratings faster through a larger K-factor.</p>
+          <p><strong className="text-white">Starting point:</strong> teams begin from a tier-based seed. Rankings therefore combine tier context with completed results.</p>
+          <p><strong className="text-white">Data rules:</strong> 2v2 and 3v3 are calculated separately. Forfeits and incomplete fixtures are excluded entirely.</p>
+        </div>
+      </details>
     </main>
   )
 }

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -23,36 +24,42 @@ export default async function TeamPage({ params }: { params: Promise<{ name: str
     .in('flop_reset_team_id', teamRows?.map((t) => t.id) ?? [])
     .order('series_date', { ascending: false })
 
-  let seriesWon = 0, seriesLost = 0, gamesWon = 0, gamesLost = 0
+  let seriesWon = 0, seriesLost = 0, gamesWon = 0, gamesLost = 0, goalsFor = 0, goalsAgainst = 0
   series?.forEach((s: any) => {
     const gw = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
     const gl = (s.matches?.length ?? 0) - gw
     gamesWon += gw
     gamesLost += gl
+    goalsFor += s.matches?.reduce((total: number, m: any) => total + Number(m.flop_reset_score ?? 0), 0) ?? 0
+    goalsAgainst += s.matches?.reduce((total: number, m: any) => total + Number(m.opponent_score ?? 0), 0) ?? 0
     if (gw > gl) seriesWon++
-    else seriesLost++
+    else if (gl > gw) seriesLost++
   })
 
   const color = TEAM_COLORS[teamName] ?? '#AF69EE'
 
   return (
-    <main className="px-8 py-16 max-w-5xl mx-auto">
+    <main className="px-4 py-10 md:px-8 md:py-16 max-w-5xl mx-auto">
       <div className="rounded-2xl border-t-4 p-8 mb-10" style={{ borderColor: color, background: `linear-gradient(135deg, ${color}22, transparent)` }}>
-        <h1 className="text-6xl font-black tracking-tight mb-2">{teamName}</h1>
+        <h1 className="text-4xl md:text-6xl font-black tracking-tight mb-2">{teamName}</h1>
         <p className="text-neutral-400 mb-6">
           {teamRows?.map((t) => t.format).join(' / ')} · Flop Reset
         </p>
-        <div className="flex gap-8">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div>
             <div className="text-3xl font-black" style={{ color }}>{seriesWon}-{seriesLost}</div>
             <div className="text-xs text-neutral-500 uppercase tracking-wide">Series Record</div>
           </div>
+          <div><div className="text-3xl font-black" style={{ color }}>{series?.length ? (goalsFor / Math.max(1,gamesWon+gamesLost)).toFixed(2) : '—'}</div><div className="text-xs text-neutral-500 uppercase tracking-wide">Goals / Game</div></div>
+          <div><div className="text-3xl font-black" style={{ color }}>{series?.length ? (goalsAgainst / Math.max(1,gamesWon+gamesLost)).toFixed(2) : '—'}</div><div className="text-xs text-neutral-500 uppercase tracking-wide">Allowed / Game</div></div>
           <div>
             <div className="text-3xl font-black" style={{ color }}>{gamesWon}-{gamesLost}</div>
             <div className="text-xs text-neutral-500 uppercase tracking-wide">Game Record</div>
           </div>
         </div>
       </div>
+
+      <section className="mb-12"><h2 className="text-2xl font-bold mb-4">Recent Form</h2><div className="flex gap-2">{series?.slice(0,5).map((s:any) => { const wins=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0; const losses=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0; const won=wins>losses; return <span key={s.series_id} className={`flex h-10 w-10 items-center justify-center rounded-lg border font-black ${won ? 'border-emerald-900 bg-emerald-950 text-emerald-400' : 'border-red-900 bg-red-950 text-red-400'}`}>{won?'W':'L'}</span> })}{(!series || series.length===0) && <p className="text-sm text-neutral-500">No recorded series yet.</p>}</div></section>
 
       <h2 className="text-2xl font-bold mb-4">Roster</h2>
        <div className="flex flex-wrap gap-3 mb-12">
@@ -71,12 +78,12 @@ export default async function TeamPage({ params }: { params: Promise<{ name: str
         ))}
       </div>
 
-      <h2 className="text-2xl font-bold mb-4">Match History</h2>
+      <div className="mb-4 flex items-center justify-between gap-4"><h2 className="text-2xl font-bold">Recent Series</h2><a href={`/records?format=${encodeURIComponent(teamRows?.[0]?.format ?? '')}`} className="text-sm text-purple-300 hover:underline">Explore records →</a></div>
       <div className="space-y-3">
         {(!series || series.length === 0) && <p className="text-neutral-500">No matches recorded yet.</p>}
         {series?.map((s: any) => {
           const gw = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-          const gl = (s.matches?.length ?? 0) - gw
+          const gl = s.matches?.filter((m: any) => m.flop_reset_score < m.opponent_score).length ?? 0
           const won = gw > gl
           return (
             <a

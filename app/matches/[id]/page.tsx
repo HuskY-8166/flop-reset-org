@@ -1,3 +1,5 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 
 export const dynamic = 'force-dynamic'
@@ -27,14 +29,14 @@ export default async function MatchCenter({ params }: { params: Promise<{ id: st
 
   if (!series) {
     return (
-      <main className="px-8 py-16 max-w-5xl mx-auto">
+      <main className="px-4 py-12 md:px-8 md:py-16 max-w-5xl mx-auto">
         <p className="text-neutral-500">Match not found.</p>
       </main>
     )
   }
 
   const gamesWon = games?.filter((g) => g.flop_reset_score > g.opponent_score).length ?? 0
-  const gamesLost = (games?.length ?? 0) - gamesWon
+  const gamesLost = games?.filter((g) => g.flop_reset_score < g.opponent_score).length ?? 0
   const won = gamesWon > gamesLost
 
   // MVP for the whole series: highest total score across all games
@@ -47,16 +49,17 @@ export default async function MatchCenter({ params }: { params: Promise<{ id: st
   const seriesMvp = Object.entries(scoreByPlayer).sort((a, b) => b[1] - a[1])[0]
 
   return (
-    <main className="px-8 py-16 max-w-5xl mx-auto">
+    <main className="px-4 py-10 md:px-8 md:py-16 max-w-5xl mx-auto">
+      <Link href="/matches" className="mb-6 inline-block text-sm text-purple-300 hover:underline">← Back to results</Link>
       <div className={`rounded-2xl border-2 p-8 text-center mb-10 ${won ? 'border-emerald-600' : 'border-red-600'}`}
         style={{ background: `linear-gradient(135deg, ${won ? 'rgba(52,211,153,0.1)' : 'rgba(239,68,68,0.1)'}, transparent)` }}>
         <div className="text-xs uppercase tracking-widest text-neutral-500 font-bold mb-4">
           {(series.teams as any)?.format} • {series.series_date}
         </div>
-        <div className="flex items-center justify-center gap-6 mb-3">
-          <span className="text-4xl font-black">{(series.teams as any)?.name}</span>
+        <div className="flex flex-col items-center justify-center gap-3 mb-3 md:flex-row md:gap-6">
+          <a href={`/teams/${encodeURIComponent((series.teams as any)?.name ?? '')}`} className="text-3xl md:text-4xl font-black text-white hover:underline">{(series.teams as any)?.name}</a>
           <span className="text-3xl font-black" style={{ color: '#AF69EE' }}>{gamesWon}–{gamesLost}</span>
-          <span className="text-4xl font-black text-neutral-400">{series.opponent_name}</span>
+          <span className="text-3xl md:text-4xl font-black text-neutral-400">{series.opponent_name}</span>
         </div>
         <span className={`text-sm font-bold uppercase px-3 py-1 rounded ${won ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
           {won ? 'Series Win' : 'Series Loss'}
@@ -87,7 +90,7 @@ export default async function MatchCenter({ params }: { params: Promise<{ id: st
                 </span>
               </div>
               {gameStats.length > 0 && (
-                <table className="w-full text-sm">
+                <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm">
                   <thead>
                     <tr className="text-neutral-500 text-xs uppercase">
                       <th className="text-left py-1">Player</th>
@@ -115,7 +118,7 @@ export default async function MatchCenter({ params }: { params: Promise<{ id: st
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               )}
             </div>
           )

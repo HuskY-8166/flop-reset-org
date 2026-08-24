@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from '@/lib/supabase'
 import { calculateEloWithHistory } from '@/lib/elo'
 export const dynamic = 'force-dynamic'
@@ -59,7 +60,7 @@ export default async function Home() {
   let totalWins = 0, totalLosses = 0
   allSeries?.forEach((s: any) => {
     const gamesWon = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-    const gamesLost = (s.matches?.length ?? 0) - gamesWon
+    const gamesLost = s.matches?.filter((m: any) => m.flop_reset_score < m.opponent_score).length ?? 0
     if (gamesWon > gamesLost) totalWins++
     else totalLosses++
   })
@@ -71,14 +72,14 @@ export default async function Home() {
   }
 
   return (
-    <main className="px-8 py-16 max-w-7xl mx-auto">
+    <main className="px-4 py-10 md:px-8 md:py-16 max-w-7xl mx-auto">
       {featuredMatch && (
-        <div className="mb-16 rounded-2xl border-2 p-10 text-center" style={{ borderColor: '#8F00FF', background: 'linear-gradient(135deg, rgba(143,0,255,0.15), rgba(0,0,0,0))' }}>
-          <div className="text-xs uppercase tracking-widest text-purple-400 font-bold mb-6">Match of the Week</div>
-          <div className="flex items-center justify-center gap-8 mb-6">
-            <span className="text-4xl font-black text-white">{(featuredMatch.teams as any)?.name}</span>
+        <div className="mb-16 rounded-2xl border-2 p-6 text-center md:p-10" style={{ borderColor: '#8F00FF', background: 'linear-gradient(135deg, rgba(143,0,255,0.15), rgba(0,0,0,0))' }}>
+          <div className="text-xs uppercase tracking-widest text-purple-400 font-bold mb-6">Next Match</div>
+          <div className="flex flex-col items-center justify-center gap-3 mb-6 md:flex-row md:gap-8">
+            <a href={`/teams/${encodeURIComponent((featuredMatch.teams as any)?.name ?? '')}`} className="text-3xl md:text-4xl font-black text-white hover:underline">{(featuredMatch.teams as any)?.name}</a>
             <span className="text-2xl font-bold text-neutral-500">VS</span>
-            <span className="text-4xl font-black text-neutral-300">{featuredMatch.opponent_name ?? 'TBD'}</span>
+            <span className="text-3xl md:text-4xl font-black text-neutral-300">{featuredMatch.opponent_name ?? 'Opponent TBD'}</span>
           </div>
           <p className="text-neutral-400 mb-1">{featuredMatch.match_date} {featuredMatch.match_time && `• ${featuredMatch.match_time}`}</p>
           <p className="text-neutral-600 text-sm">{(featuredMatch.teams as any)?.format}</p>
@@ -87,11 +88,12 @@ export default async function Home() {
 
       {/* Hero */}
       <div className="mb-20">
-        <h1 className="text-7xl font-black tracking-tight mb-2 text-white">
+        <div className="text-xs font-bold uppercase tracking-[.24em] text-purple-400 mb-2">Competitive Rocket League organization</div>
+        <h1 className="text-5xl md:text-7xl font-black tracking-tight mb-2 text-white">
           FLOP <span style={{ color: '#AF69EE' }}>RESET</span>
         </h1>
         <p className="text-neutral-500 text-lg mb-6">Competing across The Rivalry — 3v3 · 2v2</p>
-        <div className="flex gap-6 items-center">
+        <div className="flex flex-col gap-4 md:flex-row md:gap-6 md:items-center">
           <div>
             <span className="text-3xl font-bold text-white">{totalWins}-{totalLosses}</span>
             <span className="text-neutral-500 text-sm ml-2">series record, all teams</span>
@@ -136,12 +138,12 @@ export default async function Home() {
           <div className="space-y-4">
             {recentSeries?.map((s: any) => {
               const gamesWon = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-              const gamesLost = (s.matches?.length ?? 0) - gamesWon
+              const gamesLost = s.matches?.filter((m: any) => m.flop_reset_score < m.opponent_score).length ?? 0
               const won = gamesWon > gamesLost
               const matchIdsForSeries = s.matches?.map((m: any) => m.match_id) ?? []
               const mvp = mvpStats?.find((ms: any) => matchIdsForSeries.includes(ms.match_id))
               return (
-                <div key={s.series_id} className="border-t border-neutral-800 pt-4 first:border-t-0 first:pt-0">
+                <a href={`/matches/${s.series_id}`} key={s.series_id} className="block border-t border-neutral-800 pt-4 first:border-t-0 first:pt-0 no-underline hover:bg-black/10">
                   <div className="flex justify-between items-center">
                     <span className="font-semibold text-sm text-white">{s.teams?.name} vs {s.opponent_name}</span>
                     <span className={`text-xs font-bold px-2 py-0.5 rounded ${won ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
@@ -151,7 +153,7 @@ export default async function Home() {
                   <div className="text-neutral-500 text-xs mt-1">
                     {s.series_date}{mvp && ` · MVP: ${(mvp.players as any)?.name}`}
                   </div>
-                </div>
+                </a>
               )
             })}
           </div>
@@ -193,6 +195,8 @@ export default async function Home() {
           ))}
         </div>
       </div>
+
+      <section className="mt-16"><h2 className="text-sm font-semibold text-neutral-500 uppercase tracking-wide mb-3">Explore Flop Reset</h2><div className="grid grid-cols-2 gap-3 md:grid-cols-5">{[['Stats','/stats'],['Records','/records'],['Power','/power-rankings'],['Teams','/teams'],['Results','/matches']].map(([label,href]) => <a key={href} href={href} className="rounded-xl border border-neutral-800 bg-[#111] p-4 text-center font-bold text-white no-underline hover:border-purple-800 hover:bg-purple-950/20">{label}</a>)}</div></section>
     </main>
   )
 }

@@ -1,202 +1,63 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { calculateEloWithHistory } from '@/lib/elo'
-export const dynamic = 'force-dynamic'
+import { EmptyState, FormIndicator, PageHero, ResultBadge, SectionHeader, StatCard } from '@/components/ui'
+export const dynamic='force-dynamic'
 
-const TEAM_COLORS: Record<string, string> = {
-  Fracture: '#E4A0F7',
-  Frantic: '#AF69EE',
-  Frameshift: '#8F00FF',
-}
+const teamColors:Record<string,string>={Fracture:'#E4A0F7',Frantic:'#AF69EE',Frameshift:'#8F00FF'}
+const flopNames:Record<string,string>={'Flop Reset Frameshift':'Frameshift','Flop Reset - Frantic':'Frantic','Flop Reset | Fracture':'Fracture'}
+const dateLabel=(date:string)=>new Intl.DateTimeFormat('en-US',{month:'short',day:'numeric',year:'numeric',timeZone:'UTC'}).format(new Date(`${date.slice(0,10)}T00:00:00Z`))
 
-export default async function Home() {
-  const { data: competitions } = await supabase.from('competitions').select('*')
+export default async function Home(){
+  const [{data:competitions},{data:featured},{data:upcoming},{data:series},{data:teams},{data:stats},{data:leagueMatches}]=await Promise.all([
+    supabase.from('competitions').select('id, name, format, host'),
+    supabase.from('scheduled_matches').select('scheduled_id, opponent_name, match_date, match_time, competition_id, teams ( name, format )').eq('status','scheduled').order('match_date').limit(1).maybeSingle(),
+    supabase.from('scheduled_matches').select('scheduled_id, opponent_name, match_date, match_time, competition_id, teams ( name, format )').eq('status','scheduled').order('match_date').limit(3),
+    supabase.from('series').select('series_id, competition_id, opponent_name, series_date, teams ( name, format ), matches ( match_id, flop_reset_score, opponent_score, is_forfeit )').order('series_date',{ascending:false}),
+    supabase.from('teams').select('id, name, format, captain, players ( name )').order('name'),
+    supabase.from('match_player_stats').select('stat_id, goals, assists, saves, shots, score, players ( name, teams ( name, format ) ), matches ( match_date, opponent_name, is_forfeit )'),
+    supabase.from('league_matches').select('round, tier, team_a, team_b, score_a, score_b, status, match_date, format'),
+  ])
+  const compById=new Map((competitions??[]).map((c:any)=>[c.id,c]))
+  let seriesWins=0,seriesLosses=0,gameWins=0,gameLosses=0
+  ;(series??[]).forEach((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;gameWins+=w;gameLosses+=l;if(w>l)seriesWins++;else if(l>w)seriesLosses++})
+  const activePlayers=new Set((teams??[]).flatMap((team:any)=>(team.players??[]).map((p:any)=>p.name))).size
+  const groupedTeams=new Map<string,any>()
+  ;(teams??[]).forEach((team:any)=>{const current=groupedTeams.get(team.name)??{id:team.name,name:team.name,formats:[],players:[]};if(!current.formats.includes(team.format))current.formats.push(team.format);for(const player of team.players??[]){if(!current.players.some((entry:any)=>entry.name===player.name))current.players.push(player)}groupedTeams.set(team.name,current)})
+  const latest=series?.[0] as any, latestWins=latest?.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,latestLosses=latest?.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0
+  const form=(series??[]).slice(0,5).map((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return{id:s.series_id,won:w>l,href:`/matches/${s.series_id}`}})
+  const power=(['3v3','2v2'] as const).flatMap((format)=>{const data=calculateEloWithHistory((leagueMatches??[]).filter((m:any)=>m.format===format) as any);return data.teamSummaries.filter((t)=>flopNames[t.team]).map((t)=>({...t,short:flopNames[t.team],format}))})
+  const career=new Map<string,any>()
+  ;(stats??[]).filter((s:any)=>!s.matches?.is_forfeit).forEach((s:any)=>{const name=s.players?.name,format=s.players?.teams?.format;if(!name||!format)return;const key=`${name}|${format}`,r=career.get(key)??{name,team:s.players?.teams?.name??'Unknown',format,games:0,goals:0,assists:0,saves:0,shots:0,score:0};r.games++;r.goals+=Number(s.goals??0);r.assists+=Number(s.assists??0);r.saves+=Number(s.saves??0);r.shots+=Number(s.shots??0);r.score+=Number(s.score??0);career.set(key,r)})
+  const careerRows=[...career.values()],threshold=Math.max(1,Math.ceil(Math.max(0,...careerRows.map((r)=>r.games))*.2)),eligible=careerRows.filter((r)=>r.games>=threshold)
+  const leaderDefs=[['Goals',(r:any)=>r.goals,(v:number)=>String(v)],['Assists',(r:any)=>r.assists,(v:number)=>String(v)],['Saves',(r:any)=>r.saves,(v:number)=>String(v)],['Score / Game',(r:any)=>r.score/r.games,(v:number)=>v.toFixed(0)],['Shooting %',(r:any)=>r.shots?r.goals/r.shots*100:0,(v:number)=>`${v.toFixed(1)}%`]] as const
+  const leaders=leaderDefs.map(([label,value,format])=>{const pool=label==='Goals'||label==='Assists'||label==='Saves'?careerRows:eligible;const row=[...pool].filter((r)=>value(r)>0).sort((a,b)=>value(b)-value(a))[0];return{label,row,value:row?format(value(row)):'—'}})
+  const teamData=[...groupedTeams.values()].map((team:any)=>{const teamSeries=(series??[]).filter((s:any)=>s.teams?.name===team.name),wins=teamSeries.filter((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return w>l}).length,losses=teamSeries.filter((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return l>w}).length,recent=teamSeries.slice(0,5).map((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return{id:s.series_id,won:w>l,href:`/matches/${s.series_id}`}}),rating=power.filter((p)=>p.short===team.name).sort((a,b)=>(a.overallRank??999)-(b.overallRank??999))[0];return{...team,wins,losses,recent,rating}})
+  const recordDefs=[['Goals','goals'],['Assists','assists'],['Saves','saves'],['Shots','shots'],['Score','score']] as const
+  const recordEvents:any[]=[]
+  for(const[label,key]of recordDefs){let best=0;const byDate=new Map<string,any[]>();(stats??[]).filter((s:any)=>!s.matches?.is_forfeit&&s.matches?.match_date).forEach((s:any)=>{const date=s.matches.match_date.slice(0,10);byDate.set(date,[...(byDate.get(date)??[]),s])});for(const[date,day]of[...byDate.entries()].sort()){const dayBest=Math.max(...day.map((s:any)=>Number(s[key]??0)));if(dayBest>best&&dayBest>0){const setter=day.find((s:any)=>Number(s[key]??0)===dayBest);recordEvents.push({label,key,value:dayBest,date,player:setter.players?.name,team:setter.players?.teams?.name,format:setter.players?.teams?.format,opponent:setter.matches?.opponent_name,previous:best});best=dayBest}}}
+  const latestRecord=recordEvents.sort((a,b)=>b.date.localeCompare(a.date))[0]
 
-  const { data: featuredMatch } = await supabase
-    .from('scheduled_matches')
-    .select('opponent_name, match_date, match_time, teams ( name, format )')
-    .eq('status', 'scheduled')
-    .order('match_date', { ascending: true })
-    .limit(1)
-    .maybeSingle()
+  return <main className="mx-auto max-w-7xl px-4 py-8 md:px-8 md:py-12">
+    <PageHero eyebrow="Competitive Rocket League" title={<>FLOP <span className="text-purple-400">RESET</span></>} description="An esports organization built for competition—and a permanent archive built to remember every team, player, match, and record.">
+      <div className="flex flex-wrap gap-2">{teamData.map((team:any)=><Link key={team.id} href={`/teams/${encodeURIComponent(team.name)}`} className="rounded-full border bg-black/30 px-4 py-2 text-sm font-bold text-white no-underline hover:-translate-y-0.5" style={{borderColor:teamColors[team.name]??'#525252'}}>{team.name} · {team.formats.join(' / ')}</Link>)}</div>
+      <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-4"><StatCard label="Series Record" value={`${seriesWins}–${seriesLosses}`} accent/><StatCard label="Game Record" value={`${gameWins}–${gameLosses}`}/><StatCard label="Teams" value={groupedTeams.size}/><StatCard label="Players" value={activePlayers}/></div>
+    </PageHero>
 
-  const { data: upcoming } = await supabase
-    .from('scheduled_matches')
-    .select('scheduled_id, opponent_name, match_date, match_time, teams ( name, format )')
-    .eq('status', 'scheduled')
-    .order('match_date', { ascending: true })
-    .limit(3)
+    <section className="mt-12 grid gap-5 lg:grid-cols-2">
+      <div>{featured?<article className="h-full rounded-3xl border border-purple-800 bg-[radial-gradient(circle_at_top_right,rgba(143,0,255,.24),transparent_42%),#111] p-6 md:p-8"><div className="text-xs font-black uppercase tracking-[.2em] text-purple-400">Next Match</div><div className="mt-6 flex flex-col items-center gap-3 text-center sm:flex-row sm:justify-center sm:gap-6"><Link href={`/teams/${encodeURIComponent((featured.teams as any)?.name??'')}`} className="text-3xl font-black text-white hover:underline">{(featured.teams as any)?.name}</Link><span className="text-xl text-neutral-600">VS</span><span className="text-3xl font-black text-neutral-300">{featured.opponent_name??'Opponent TBD'}</span></div><div className="mt-6 text-center text-sm text-neutral-500">{compById.get(featured.competition_id)?.name??'Competition not recorded'} · {(featured.teams as any)?.format}<br/><span className="text-neutral-300">{dateLabel(featured.match_date)} {featured.match_time||''}</span></div><Link href="/schedule" className="mt-6 block text-center text-sm font-semibold text-purple-300 hover:underline">Full schedule →</Link></article>:<EmptyState title="No upcoming match scheduled" description="The next fixture will take over this space as soon as it is added." actionHref="/schedule" actionLabel="View schedule"/>}</div>
+      <div>{latest?<article className="h-full rounded-3xl border border-neutral-800 bg-[#111] p-6 md:p-8"><div className="text-xs font-black uppercase tracking-[.2em] text-neutral-500">Latest Result</div><div className="mt-5 flex items-center justify-between gap-4"><div><div className="text-3xl font-black text-white">{latest.teams?.name}</div><div className="mt-1 text-lg text-neutral-500">vs {latest.opponent_name}</div></div><div className="text-right"><div className="text-4xl font-black text-purple-300">{latestWins}–{latestLosses}</div><div className="mt-2"><ResultBadge wins={latestWins} losses={latestLosses}/></div></div></div><div className="mt-5 text-sm text-neutral-500">{compById.get(latest.competition_id)?.name??'Competition not recorded'} · {latest.teams?.format} · {dateLabel(latest.series_date)}</div><div className="mt-4 flex flex-wrap gap-2">{latest.matches?.map((game:any,index:number)=><span key={game.match_id} className="rounded-lg bg-black/30 px-3 py-2 text-sm text-neutral-400">G{index+1} · {game.flop_reset_score}–{game.opponent_score}</span>)}</div><Link href={`/matches/${latest.series_id}`} className="mt-6 inline-block text-sm font-semibold text-purple-300 hover:underline">Open Match Center →</Link></article>:<EmptyState title="No completed series yet" description="The latest result will appear after the first series is recorded."/>}</div>
+    </section>
 
-  const { data: recentSeries } = await supabase
-    .from('series')
-    .select('series_id, opponent_name, series_date, teams ( name, format ), matches ( flop_reset_score, opponent_score, match_id )')
-    .order('series_date', { ascending: false })
-    .limit(3)
+    <section className="mt-16"><SectionHeader eyebrow="Squads" title="Team Showcase" description="Every Flop Reset team appears automatically with its registered formats, roster, record, form, and available Power rating." href="/teams"/><div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">{teamData.map((team:any)=><Link key={team.id} href={`/teams/${encodeURIComponent(team.name)}`} className="group rounded-3xl border border-neutral-800 border-t-4 bg-[#111] p-6 text-white no-underline hover:-translate-y-1 hover:bg-[#151515]" style={{borderTopColor:teamColors[team.name]??'#737373'}}><div className="flex items-start justify-between"><div><div className="text-xs font-bold uppercase tracking-wide text-neutral-500">Flop Reset · {team.formats.join(' / ')}</div><h2 className="mt-1 text-3xl font-black">{team.name}</h2></div><ResultBadge wins={team.wins} losses={team.losses}/></div><div className="mt-5 text-sm text-neutral-500">Roster: {(team.players??[]).slice(0,4).map((p:any)=>p.name).join(' · ')||'Not recorded'}</div><div className="mt-4"><FormIndicator results={team.recent.map((result:any)=>({id:result.id,won:result.won}))}/></div><div className="mt-5 border-t border-neutral-800 pt-4 text-sm text-neutral-500">{team.rating?`#${team.rating.overallRank} overall · ${Math.round(team.rating.rating)} Elo · ${team.rating.tier}`:'Power rating not available yet'}</div></Link>)}</div></section>
 
-  const matchIds = recentSeries?.flatMap((s: any) => s.matches?.map((m: any) => m.match_id) ?? []) ?? []
-  const { data: mvpStats } = matchIds.length
-    ? await supabase
-        .from('match_player_stats')
-        .select('match_id, mvp, players ( name )')
-        .in('match_id', matchIds)
-        .eq('mvp', true)
-    : { data: [] }
+    <section className="mt-16 grid gap-6 lg:grid-cols-[1.2fr_.8fr]"><div><SectionHeader eyebrow="Current form" title="Last Five Series" description="The organization’s most recent competitive results." href="/matches"/><div className="rounded-2xl border border-neutral-800 bg-[#111] p-6"><FormIndicator results={form}/><div className="mt-5 space-y-3">{(series??[]).slice(0,5).map((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return <Link key={s.series_id} href={`/matches/${s.series_id}`} className="flex items-center justify-between gap-3 border-t border-neutral-800 pt-3 text-white no-underline first:border-0 first:pt-0"><div><div className="font-bold">{s.teams?.name} vs {s.opponent_name}</div><div className="text-xs text-neutral-600">{s.series_date} · {s.teams?.format}</div></div><ResultBadge wins={w} losses={l}/></Link>})}</div></div></div><div><SectionHeader eyebrow="League strength" title="Power Snapshot" href="/power-rankings"/><div className="rounded-2xl border border-neutral-800 bg-[#111] p-5">{power.length?power.sort((a,b)=>(a.overallRank??999)-(b.overallRank??999)).map((p)=><Link key={`${p.team}-${p.format}`} href={`/teams/${encodeURIComponent(p.short)}`} className="flex items-center justify-between border-t border-neutral-800 py-3 text-white no-underline first:border-0"><div><div className="font-bold">{p.short}</div><div className="text-xs text-neutral-600">{p.format} · {p.tier} · {p.matchesTracked} tracked</div></div><div className="text-right"><div className="font-black text-purple-300">#{p.overallRank}</div><div className="text-xs text-neutral-500">{Math.round(p.rating)} Elo</div></div></Link>):<p className="text-sm text-neutral-500">No completed non-forfeit league results are available yet.</p>}</div></div></section>
 
-  const { data: leagueMatches3v3 } = await supabase
-    .from('league_matches')
-    .select('round, tier, team_a, team_b, score_a, score_b, status, match_date')
-    .eq('format', '3v3')
+    <section className="mt-16"><SectionHeader eyebrow="Player performance" title="Stat Leaders" description={`Career leaders across recorded formats. Rate categories require at least ${threshold} GP.`} href="/stats"/><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">{leaders.map((leader)=><article key={leader.label} className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs font-bold uppercase tracking-wide text-neutral-500">{leader.label}</div><div className="mt-2 text-3xl font-black text-purple-300">{leader.value}</div>{leader.row?<><Link href={`/players/${encodeURIComponent(leader.row.name)}`} className="mt-3 inline-block font-bold text-white hover:underline">{leader.row.name}</Link><div className="text-xs text-neutral-600">{leader.row.team} · {leader.row.format} · {leader.row.games} GP</div></>:<div className="mt-3 text-sm text-neutral-600">No qualifying player</div>}</article>)}</div></section>
 
-  const FLOP_TEAMS = ['Flop Reset Frameshift', 'Flop Reset - Frantic', 'Flop Reset | Fracture']
-  const eloData = leagueMatches3v3 ? calculateEloWithHistory(leagueMatches3v3 as any) : null
-  const flopRankings = eloData
-    ? eloData.teamSummaries.filter((t) => FLOP_TEAMS.includes(t.team))
-    : []
+    <section className="mt-16 grid gap-6 lg:grid-cols-2"><div><SectionHeader eyebrow="Record activity" title="Latest Record Established" href="/records" linkLabel="Record Book"/>{latestRecord?<Link href="/records" className="block rounded-3xl border border-amber-900/40 bg-[radial-gradient(circle_at_top_right,rgba(245,158,11,.12),transparent_45%),#111] p-6 text-white no-underline hover:border-amber-700"><div className="text-xs font-black uppercase tracking-[.2em] text-amber-400">New Org Record</div><div className="mt-3 text-4xl font-black">{latestRecord.value} {latestRecord.label}</div><div className="mt-2 text-xl font-bold text-purple-300">{latestRecord.player}</div><div className="mt-3 text-sm text-neutral-500">{latestRecord.team} · {latestRecord.format}<br/>vs {latestRecord.opponent} · {dateLabel(latestRecord.date)}</div>{latestRecord.previous>0&&<div className="mt-4 border-t border-neutral-800 pt-3 text-xs text-neutral-600">Previous mark: {latestRecord.previous} · +{latestRecord.value-latestRecord.previous}</div>}</Link>:<EmptyState title="No record activity yet" description="A verified record event will appear after competitive player performances are recorded."/>}</div><div><SectionHeader eyebrow="Competitions" title="Current League Context" href="/competitions"/><div className="grid gap-3">{(competitions??[]).slice(0,4).map((c:any)=>{const count=(series??[]).filter((s:any)=>s.competition_id===c.id).length,next=(upcoming??[]).filter((m:any)=>m.competition_id===c.id).length;return <Link key={c.id} href={`/competitions/${c.id}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="flex justify-between gap-3"><div><div className="text-xs font-bold uppercase text-purple-400">{c.format}</div><div className="mt-1 text-xl font-black">{c.name}</div><div className="text-xs text-neutral-600">{c.host}</div></div><div className="text-right text-sm text-neutral-500">{count} results<br/>{next} upcoming</div></div></Link>})}</div></div></section>
 
-  const { data: allSeries } = await supabase
-    .from('series')
-    .select('teams ( name ), matches ( flop_reset_score, opponent_score )')
-
-  let totalWins = 0, totalLosses = 0
-  allSeries?.forEach((s: any) => {
-    const gamesWon = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-    const gamesLost = s.matches?.filter((m: any) => m.flop_reset_score < m.opponent_score).length ?? 0
-    if (gamesWon > gamesLost) totalWins++
-    else totalLosses++
-  })
-
-  function moveArrow(move: number) {
-    if (move > 0) return <span className="text-emerald-400 text-xs">▲{move}</span>
-    if (move < 0) return <span className="text-red-400 text-xs">▼{Math.abs(move)}</span>
-    return <span className="text-neutral-500 text-xs">—</span>
-  }
-
-  return (
-    <main className="px-4 py-10 md:px-8 md:py-16 max-w-7xl mx-auto">
-      {featuredMatch && (
-        <div className="mb-16 rounded-2xl border-2 p-6 text-center md:p-10" style={{ borderColor: '#8F00FF', background: 'linear-gradient(135deg, rgba(143,0,255,0.15), rgba(0,0,0,0))' }}>
-          <div className="text-xs uppercase tracking-widest text-purple-400 font-bold mb-6">Next Match</div>
-          <div className="flex flex-col items-center justify-center gap-3 mb-6 md:flex-row md:gap-8">
-            <a href={`/teams/${encodeURIComponent((featuredMatch.teams as any)?.name ?? '')}`} className="text-3xl md:text-4xl font-black text-white hover:underline">{(featuredMatch.teams as any)?.name}</a>
-            <span className="text-2xl font-bold text-neutral-500">VS</span>
-            <span className="text-3xl md:text-4xl font-black text-neutral-300">{featuredMatch.opponent_name ?? 'Opponent TBD'}</span>
-          </div>
-          <p className="text-neutral-400 mb-1">{featuredMatch.match_date} {featuredMatch.match_time && `• ${featuredMatch.match_time}`}</p>
-          <p className="text-neutral-600 text-sm">{(featuredMatch.teams as any)?.format}</p>
-        </div>
-      )}
-
-      {/* Hero */}
-      <div className="mb-20">
-        <div className="text-xs font-bold uppercase tracking-[.24em] text-purple-400 mb-2">Competitive Rocket League organization</div>
-        <h1 className="text-5xl md:text-7xl font-black tracking-tight mb-2 text-white">
-          FLOP <span style={{ color: '#AF69EE' }}>RESET</span>
-        </h1>
-        <p className="text-neutral-500 text-lg mb-6">Competing across The Rivalry — 3v3 · 2v2</p>
-        <div className="flex flex-col gap-4 md:flex-row md:gap-6 md:items-center">
-          <div>
-            <span className="text-3xl font-bold text-white">{totalWins}-{totalLosses}</span>
-            <span className="text-neutral-500 text-sm ml-2">series record, all teams</span>
-          </div>
-          <div className="flex gap-2">
-            {Object.entries(TEAM_COLORS).map(([name, color]) => (
-              <a
-                key={name}
-                href={`/teams#${name}`}
-                style={{ borderColor: color }}
-                className="text-sm px-3 py-1 rounded-full border font-semibold text-neutral-300 hover:bg-neutral-900 transition-colors"
-              >
-                {name}
-              </a>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Three-column dashboard row */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-16">
-        {/* Upcoming */}
-        <div className="rounded-xl bg-[#1b1b1b] border border-neutral-800 p-6">
-          <h2 className="text-lg font-bold mb-4 text-white">Upcoming</h2>
-          {(!upcoming || upcoming.length === 0) && <p className="text-neutral-500 text-sm">Nothing scheduled.</p>}
-          <div className="space-y-4">
-            {upcoming?.map((m) => (
-              <div key={m.scheduled_id} className="border-t border-neutral-800 pt-4 first:border-t-0 first:pt-0">
-                <div className="font-semibold text-sm text-white">
-                  {(m.teams as any)?.name} vs {m.opponent_name ?? 'TBD'}
-                </div>
-                <div className="text-neutral-500 text-xs mt-1">{m.match_date} {m.match_time}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Recent Results */}
-        <div className="rounded-xl bg-[#1b1b1b] border border-neutral-800 p-6">
-          <h2 className="text-lg font-bold mb-4 text-white">Recent Results</h2>
-          {(!recentSeries || recentSeries.length === 0) && <p className="text-neutral-500 text-sm">No results yet.</p>}
-          <div className="space-y-4">
-            {recentSeries?.map((s: any) => {
-              const gamesWon = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-              const gamesLost = s.matches?.filter((m: any) => m.flop_reset_score < m.opponent_score).length ?? 0
-              const won = gamesWon > gamesLost
-              const matchIdsForSeries = s.matches?.map((m: any) => m.match_id) ?? []
-              const mvp = mvpStats?.find((ms: any) => matchIdsForSeries.includes(ms.match_id))
-              return (
-                <a href={`/matches/${s.series_id}`} key={s.series_id} className="block border-t border-neutral-800 pt-4 first:border-t-0 first:pt-0 no-underline hover:bg-black/10">
-                  <div className="flex justify-between items-center">
-                    <span className="font-semibold text-sm text-white">{s.teams?.name} vs {s.opponent_name}</span>
-                    <span className={`text-xs font-bold px-2 py-0.5 rounded ${won ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
-                      {won ? 'W' : 'L'} {gamesWon}-{gamesLost}
-                    </span>
-                  </div>
-                  <div className="text-neutral-500 text-xs mt-1">
-                    {s.series_date}{mvp && ` · MVP: ${(mvp.players as any)?.name}`}
-                  </div>
-                </a>
-              )
-            })}
-          </div>
-        </div>
-
-        {/* Power Rankings Snapshot */}
-        <div className="rounded-xl bg-[#1b1b1b] border border-neutral-800 p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-lg font-bold text-white">Power Rankings</h2>
-            <a href="/power-rankings" className="text-xs text-purple-400 hover:underline">View all →</a>
-          </div>
-          {flopRankings.length === 0 && <p className="text-neutral-500 text-sm">No ranking data yet.</p>}
-          <div className="space-y-4">
-            {flopRankings.map((t) => (
-              <div key={t.team} className="border-t border-neutral-800 pt-4 first:border-t-0 first:pt-0">
-                <div className="flex justify-between items-center">
-                  <span className="font-semibold text-sm text-white">
-                    {t.team.replace('Flop Reset ', '').replace(' | ', '').replace(' - ', '')}
-                  </span>
-                  {moveArrow(t.rankMove)}
-                </div>
-                <div className="text-neutral-500 text-xs mt-1">
-                  {t.tier} · #{t.overallRank} overall · {Math.round(t.rating)} Elo
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* Competitions, secondary */}
-      <div>
-        <h2 className="text-sm font-semibold text-neutral-500 uppercase tracking-wide mb-3">Competitions</h2>
-        <div className="flex flex-wrap gap-3">
-          {competitions?.map((comp) => (
-            <div key={comp.id} className="text-sm text-neutral-400 bg-[#1b1b1b] border border-neutral-800 rounded-full px-4 py-1 hover:border-purple-700 transition-colors">
-              {comp.name} — {comp.host}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      <section className="mt-16"><h2 className="text-sm font-semibold text-neutral-500 uppercase tracking-wide mb-3">Explore Flop Reset</h2><div className="grid grid-cols-2 gap-3 md:grid-cols-5">{[['Stats','/stats'],['Records','/records'],['Power','/power-rankings'],['Teams','/teams'],['Results','/matches']].map(([label,href]) => <a key={href} href={href} className="rounded-xl border border-neutral-800 bg-[#111] p-4 text-center font-bold text-white no-underline hover:border-purple-800 hover:bg-purple-950/20">{label}</a>)}</div></section>
-    </main>
-  )
+    <section className="mt-16"><SectionHeader eyebrow="Permanent archive" title="History Starts With Every Result" description="Follow the organization from its latest match back through first appearances, rivalries, records, and all-time leaders." href="/history" linkLabel="Enter History"/><div className="grid grid-cols-2 gap-3 md:grid-cols-5">{[['History','/history'],['Record Book','/records'],['All-Time Leaders','/history/leaders'],['Rivalries','/rivalries'],['Transactions','/transactions']].map(([label,href])=><Link key={href} href={href} className="rounded-xl border border-neutral-800 bg-[#111] p-4 text-center font-bold text-white no-underline hover:border-purple-800 hover:bg-purple-950/20">{label}</Link>)}</div></section>
+  </main>
 }

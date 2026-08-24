@@ -1,107 +1,43 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { Metadata } from 'next'
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { calculateEloWithHistory } from '@/lib/elo'
+import { EmptyState, EntityBadge, FormIndicator, PageHero, ResultBadge, SectionHeader, StatCard } from '@/components/ui'
+export const dynamic='force-dynamic'
+const colors:Record<string,string>={Fracture:'#E4A0F7',Frantic:'#AF69EE',Frameshift:'#8F00FF'}
 
-export const dynamic = 'force-dynamic'
+export async function generateMetadata({params}:{params:Promise<{name:string}>}):Promise<Metadata>{const{name}=await params,team=decodeURIComponent(name);return{title:`${team} — Flop Reset Rocket League`,description:`Roster, results, stats, and history for Flop Reset ${team}.`}}
 
-const TEAM_COLORS: Record<string, string> = {
-  Fracture: '#E4A0F7',
-  Frantic: '#AF69EE',
-  Frameshift: '#8F00FF',
-}
-
-export default async function TeamPage({ params }: { params: Promise<{ name: string }> }) {
-  const { name } = await params
-  const teamName = decodeURIComponent(name)
-
-  const { data: teamRows } = await supabase
-    .from('teams')
-    .select('id, name, format, captain, players ( player_id, name )')
-    .eq('name', teamName)
-
-  const { data: series } = await supabase
-    .from('series')
-    .select('series_id, opponent_name, series_date, teams ( name, format ), matches ( flop_reset_score, opponent_score )')
-    .in('flop_reset_team_id', teamRows?.map((t) => t.id) ?? [])
-    .order('series_date', { ascending: false })
-
-  let seriesWon = 0, seriesLost = 0, gamesWon = 0, gamesLost = 0, goalsFor = 0, goalsAgainst = 0
-  series?.forEach((s: any) => {
-    const gw = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-    const gl = (s.matches?.length ?? 0) - gw
-    gamesWon += gw
-    gamesLost += gl
-    goalsFor += s.matches?.reduce((total: number, m: any) => total + Number(m.flop_reset_score ?? 0), 0) ?? 0
-    goalsAgainst += s.matches?.reduce((total: number, m: any) => total + Number(m.opponent_score ?? 0), 0) ?? 0
-    if (gw > gl) seriesWon++
-    else if (gl > gw) seriesLost++
-  })
-
-  const color = TEAM_COLORS[teamName] ?? '#AF69EE'
-
-  return (
-    <main className="px-4 py-10 md:px-8 md:py-16 max-w-5xl mx-auto">
-      <div className="rounded-2xl border-t-4 p-8 mb-10" style={{ borderColor: color, background: `linear-gradient(135deg, ${color}22, transparent)` }}>
-        <h1 className="text-4xl md:text-6xl font-black tracking-tight mb-2">{teamName}</h1>
-        <p className="text-neutral-400 mb-6">
-          {teamRows?.map((t) => t.format).join(' / ')} · Flop Reset
-        </p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-          <div>
-            <div className="text-3xl font-black" style={{ color }}>{seriesWon}-{seriesLost}</div>
-            <div className="text-xs text-neutral-500 uppercase tracking-wide">Series Record</div>
-          </div>
-          <div><div className="text-3xl font-black" style={{ color }}>{series?.length ? (goalsFor / Math.max(1,gamesWon+gamesLost)).toFixed(2) : '—'}</div><div className="text-xs text-neutral-500 uppercase tracking-wide">Goals / Game</div></div>
-          <div><div className="text-3xl font-black" style={{ color }}>{series?.length ? (goalsAgainst / Math.max(1,gamesWon+gamesLost)).toFixed(2) : '—'}</div><div className="text-xs text-neutral-500 uppercase tracking-wide">Allowed / Game</div></div>
-          <div>
-            <div className="text-3xl font-black" style={{ color }}>{gamesWon}-{gamesLost}</div>
-            <div className="text-xs text-neutral-500 uppercase tracking-wide">Game Record</div>
-          </div>
-        </div>
-      </div>
-
-      <section className="mb-12"><h2 className="text-2xl font-bold mb-4">Recent Form</h2><div className="flex gap-2">{series?.slice(0,5).map((s:any) => { const wins=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0; const losses=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0; const won=wins>losses; return <span key={s.series_id} className={`flex h-10 w-10 items-center justify-center rounded-lg border font-black ${won ? 'border-emerald-900 bg-emerald-950 text-emerald-400' : 'border-red-900 bg-red-950 text-red-400'}`}>{won?'W':'L'}</span> })}{(!series || series.length===0) && <p className="text-sm text-neutral-500">No recorded series yet.</p>}</div></section>
-
-      <h2 className="text-2xl font-bold mb-4">Roster</h2>
-       <div className="flex flex-wrap gap-3 mb-12">
-        {Array.from(
-          new Map(
-            (teamRows?.flatMap((t) => t.players as any[]) ?? []).map((p) => [p.name, p])
-          ).values()
-        ).map((p, i) => (
-           <a
-            key={i}
-            href={`/players/${encodeURIComponent(p.name)}`}
-            className="px-4 py-2 rounded-full border border-neutral-700 hover:border-purple-500 text-neutral-200 hover:text-white transition-colors"
-           >
-            {p.name}
-          </a>
-        ))}
-      </div>
-
-      <div className="mb-4 flex items-center justify-between gap-4"><h2 className="text-2xl font-bold">Recent Series</h2><a href={`/records?format=${encodeURIComponent(teamRows?.[0]?.format ?? '')}`} className="text-sm text-purple-300 hover:underline">Explore records →</a></div>
-      <div className="space-y-3">
-        {(!series || series.length === 0) && <p className="text-neutral-500">No matches recorded yet.</p>}
-        {series?.map((s: any) => {
-          const gw = s.matches?.filter((m: any) => m.flop_reset_score > m.opponent_score).length ?? 0
-          const gl = s.matches?.filter((m: any) => m.flop_reset_score < m.opponent_score).length ?? 0
-          const won = gw > gl
-          return (
-            <a
-              key={s.series_id}
-              href={`/matches/${s.series_id}`}
-              className={`block no-underline rounded-xl bg-[#1b1b1b] border-l-4 p-4 hover:bg-neutral-800 transition-colors ${won ? 'border-emerald-500' : 'border-red-500'}`}
-            >
-              <div className="flex justify-between items-center">
-                <span className="font-semibold text-white">vs {s.opponent_name}</span>
-                <span className={`text-sm font-bold ${won ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {won ? 'W' : 'L'} {gw}-{gl}
-                </span>
-              </div>
-              <div className="text-neutral-500 text-xs">{s.series_date}</div>
-            </a>
-          )
-        })}
-      </div>
-    </main>
-  )
+export default async function TeamPage({params}:{params:Promise<{name:string}>}){
+  const{name}=await params,teamName=decodeURIComponent(name)
+  const{data:teamRows}=await supabase.from('teams').select('id, name, format, captain, players ( player_id, name, aliases )').eq('name',teamName)
+  if(!teamRows?.length)return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="Team not found" description="This squad is not registered in the Flop Reset archive." actionHref="/teams" actionLabel="View teams"/></main>
+  const teamIds=teamRows.map((t)=>t.id),playerIds=teamRows.flatMap((t:any)=>(t.players??[]).map((p:any)=>p.player_id))
+  const[{data:series},{data:scheduled},{data:stats},{data:competitions},{data:leagueMatches}]=await Promise.all([
+    supabase.from('series').select('series_id, competition_id, opponent_name, series_date, teams ( name, format ), matches ( flop_reset_score, opponent_score, is_forfeit )').in('flop_reset_team_id',teamIds).order('series_date',{ascending:false}),
+    supabase.from('scheduled_matches').select('scheduled_id, competition_id, opponent_name, match_date, match_time, teams ( name, format )').in('flop_reset_team_id',teamIds).eq('status','scheduled').order('match_date'),
+    supabase.from('match_player_stats').select('player_id, goals, assists, saves, shots, score, mvp, players ( name ), matches ( is_forfeit )').in('player_id',playerIds),
+    supabase.from('competitions').select('id, name, format'),
+    supabase.from('league_matches').select('round, tier, team_a, team_b, score_a, score_b, status, match_date, format').in('format',teamRows.map((t)=>t.format)),
+  ])
+  const compById=new Map((competitions??[]).map((c:any)=>[c.id,c])),accent=colors[teamName]??'#AF69EE'
+  let seriesWins=0,seriesLosses=0,gameWins=0,gameLosses=0,goalsFor=0,goalsAgainst=0
+  ;(series??[]).forEach((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;gameWins+=w;gameLosses+=l;goalsFor+=s.matches?.reduce((a:number,m:any)=>a+Number(m.flop_reset_score??0),0)??0;goalsAgainst+=s.matches?.reduce((a:number,m:any)=>a+Number(m.opponent_score??0),0)??0;if(w>l)seriesWins++;else if(l>w)seriesLosses++})
+  const roster=new Map<string,any>();teamRows.flatMap((t:any)=>t.players??[]).forEach((p:any)=>roster.set(p.name,{...p,formats:teamRows.filter((t:any)=>(t.players??[]).some((x:any)=>x.name===p.name)).map((t)=>t.format)}))
+  const playerTotals=new Map<string,any>();(stats??[]).filter((s:any)=>!s.matches?.is_forfeit).forEach((s:any)=>{const name=s.players?.name;if(!name)return;const r=playerTotals.get(name)??{name,games:0,goals:0,assists:0,saves:0,shots:0,score:0,mvps:0};r.games++;r.goals+=Number(s.goals??0);r.assists+=Number(s.assists??0);r.saves+=Number(s.saves??0);r.shots+=Number(s.shots??0);r.score+=Number(s.score??0);r.mvps+=s.mvp?1:0;playerTotals.set(name,r)})
+  const leaders=[...playerTotals.values()]
+  const leaderDefs=[['Goals','goals'],['Assists','assists'],['Saves','saves'],['Shots','shots'],['Score / Game','scoreRate'],['Shooting %','shooting']] as const
+  const power=teamRows.map((row)=>{const data=calculateEloWithHistory((leagueMatches??[]).filter((m:any)=>m.format===row.format) as any);return data.teamSummaries.find((t)=>t.team.toLowerCase().includes(teamName.toLowerCase()))}).find(Boolean)
+  const form=(series??[]).slice(0,5).map((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return{id:s.series_id,won:w>l,href:`/matches/${s.series_id}`}})
+  const entered=[...new Set((series??[]).map((s:any)=>s.competition_id).filter(Boolean))].map((id)=>compById.get(id)).filter(Boolean)
+  return <main className="mx-auto max-w-7xl px-4 py-10 md:px-8 md:py-14"><PageHero eyebrow={`Flop Reset · ${teamRows.map((t)=>t.format).join(' / ')}`} title={teamName} description="Team hub for the current roster, competitive form, leaders, schedule, results, and preserved archive context." accent={accent}><div className="grid grid-cols-2 gap-3 md:grid-cols-5"><StatCard label="Series Record" value={`${seriesWins}–${seriesLosses}`} accent/><StatCard label="Game Record" value={`${gameWins}–${gameLosses}`}/><StatCard label="Goals / Game" value={gameWins+gameLosses?(goalsFor/(gameWins+gameLosses)).toFixed(2):'—'}/><StatCard label="Allowed / Game" value={gameWins+gameLosses?(goalsAgainst/(gameWins+gameLosses)).toFixed(2):'—'}/><StatCard label="Power" value={power?`#${power.overallRank}`:'—'} detail={power?`${Math.round(power.rating)} Elo · ${power.tier}`:'No rating yet'}/></div></PageHero>
+    <nav className="sticky top-14 z-20 my-8 overflow-x-auto rounded-xl border border-neutral-800 bg-[#0d0d0d]/95 px-4 py-3"><div className="flex min-w-max gap-5 text-xs font-bold uppercase tracking-wide text-neutral-500">{[['roster','Roster'],['leaders','Leaders'],['form','Form'],['schedule','Schedule'],['results','Results'],['history','History']].map(([id,label])=><a key={id} href={`#${id}`} className="hover:text-purple-300">{label}</a>)}</div></nav>
+    <section id="roster" className="scroll-mt-28"><SectionHeader eyebrow="Current registration" title="Roster" description="Aliases are shown for import identity continuity; dated roster membership requires the future history model."/><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[...roster.values()].map((p:any)=>{const t=playerTotals.get(p.name);return <Link key={p.name} href={`/players/${encodeURIComponent(p.name)}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:-translate-y-0.5 hover:border-purple-800"><div className="flex items-start justify-between"><div><h3 className="text-2xl font-black">{p.name}</h3><div className="mt-1 flex flex-wrap gap-1">{p.formats.map((f:string)=><EntityBadge key={f}>{f}</EntityBadge>)}</div></div><div className="text-right"><div className="text-2xl font-black text-purple-300">{t?.games??0}</div><div className="text-[10px] uppercase text-neutral-600">Games</div></div></div>{p.aliases?.length>0&&<div className="mt-4 text-xs text-neutral-600">Previously / aliases: {p.aliases.join(', ')}</div>}{t&&<div className="mt-4 grid grid-cols-4 gap-2 text-center text-sm"><div><b>{t.goals}</b><small className="block text-neutral-600">G</small></div><div><b>{t.assists}</b><small className="block text-neutral-600">A</small></div><div><b>{t.saves}</b><small className="block text-neutral-600">SV</small></div><div><b>{t.shots}</b><small className="block text-neutral-600">SH</small></div></div>}</Link>})}</div></section>
+    <section id="leaders" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Team performance" title="Team Leaders"/><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{leaderDefs.map(([label,key])=>{const value=(p:any)=>key==='scoreRate'?p.score/p.games:key==='shooting'?(p.shots?p.goals/p.shots*100:0):p[key],best=[...leaders].filter((p)=>value(p)>0).sort((a,b)=>value(b)-value(a))[0];return <article key={key} className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs font-bold uppercase text-neutral-500">{label}</div><div className="mt-2 text-3xl font-black text-purple-300">{best?(key==='shooting'?`${value(best).toFixed(1)}%`:key==='scoreRate'?value(best).toFixed(0):value(best)):'—'}</div>{best&&<Link href={`/players/${encodeURIComponent(best.name)}`} className="mt-2 inline-block font-bold text-white hover:underline">{best.name}</Link>}</article>})}</div></section>
+    <section id="form" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Competitive momentum" title="Current Form" description="The five most recent recorded series."/><div className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><FormIndicator results={form}/></div></section>
+    <section id="schedule" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="What’s next" title="Upcoming Matches" href="/schedule"/>{scheduled?.length?<div className="grid gap-3 md:grid-cols-2">{scheduled.map((m:any)=><article key={m.scheduled_id} className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs text-neutral-600">{m.match_date} {m.match_time||''} · {compById.get(m.competition_id)?.name??'Competition not recorded'}</div><div className="mt-2 text-xl font-bold text-white">{teamName} <span className="text-neutral-600">vs</span> {m.opponent_name??'Opponent TBD'}</div></article>)}</div>:<EmptyState title="No upcoming match scheduled" description={`The next ${teamName} fixture will appear here when it is added.`}/>}</section>
+    <section id="results" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Recent competition" title="Recent Series" href={`/matches?team=${encodeURIComponent(teamName)}`} linkLabel="Full history"/><div className="space-y-3">{(series??[]).slice(0,10).map((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return <Link key={s.series_id} href={`/matches/${s.series_id}`} className="flex flex-col justify-between gap-3 rounded-xl border border-neutral-800 bg-[#111] p-4 text-white no-underline hover:border-purple-800 sm:flex-row sm:items-center"><div><div className="text-xs text-neutral-600">{s.series_date} · {compById.get(s.competition_id)?.name??'Competition not recorded'}</div><div className="mt-1 font-bold">vs {s.opponent_name}</div></div><ResultBadge wins={w} losses={l}/></Link>})}</div></section>
+    <section id="history" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Permanent context" title="Team History"/><div className="grid gap-4 md:grid-cols-2"><article className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><h3 className="font-bold text-white">Competitions Entered</h3><div className="mt-4 flex flex-wrap gap-2">{entered.length?entered.map((c:any)=><Link key={c.id} href={`/competitions/${c.id}`} className="rounded-full border border-neutral-700 px-3 py-2 text-sm text-neutral-300 no-underline hover:border-purple-700">{c.name} · {c.format}</Link>):<span className="text-sm text-neutral-600">No competition history recorded.</span>}</div></article><article className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><h3 className="font-bold text-white">Roster History</h3><p className="mt-3 text-sm text-neutral-500">Dated join and leave history has not been recorded yet. Current registrations and first appearances remain available without inventing transaction dates.</p><Link href="/transactions" className="mt-4 inline-block text-sm text-purple-300 hover:underline">Transactions foundation →</Link></article></div></section>
+  </main>
 }

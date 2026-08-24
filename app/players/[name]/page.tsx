@@ -1,4 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import {
@@ -13,6 +14,20 @@ import {
 } from '@/lib/processSkills'
 
 export const dynamic = 'force-dynamic'
+
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ name: string }>
+}): Promise<Metadata> {
+  const { name } = await params
+  const playerName = decodeURIComponent(name)
+
+  return {
+    title: `${playerName} — Flop Reset Player Profile`,
+    description: `Career statistics, Process Skills, recent form, records, and opponent history for ${playerName}.`,
+  }
+}
 
 type PlayerRow = {
   player_id: number

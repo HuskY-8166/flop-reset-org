@@ -1,129 +1,37 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import type { Metadata } from 'next'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { EmptyState, ResultBadge, SectionHeader, StatCard } from '@/components/ui'
+export const dynamic='force-dynamic'
 
-export const dynamic = 'force-dynamic'
+export async function generateMetadata({params}:{params:Promise<{id:string}>}):Promise<Metadata>{const{id}=await params;const{data:s}=await supabase.from('series').select('opponent_name, teams ( name )').eq('series_id',Number(id)).maybeSingle();return{title:s?`${(s.teams as any)?.name} vs ${s.opponent_name} — Flop Reset`:'Match Center — Flop Reset'}}
 
-export default async function MatchCenter({ params }: { params: Promise<{ id: string }> }) {
-  const { id } = await params
-  const seriesId = parseInt(id)
-
-  const { data: series } = await supabase
-    .from('series')
-    .select('series_id, opponent_name, series_date, best_of, notes, teams ( name, format )')
-    .eq('series_id', seriesId)
-    .single()
-
-  const { data: games } = await supabase
-    .from('matches')
-    .select('match_id, flop_reset_score, opponent_score, is_forfeit, round, match_date')
-    .eq('series_id', seriesId)
-    .order('match_id', { ascending: true })
-
-  const gameIds = games?.map((g) => g.match_id) ?? []
-
-  const { data: playerStats } = await supabase
-    .from('match_player_stats')
-    .select('match_id, goals, assists, saves, shots, score, mvp, players ( name )')
-    .in('match_id', gameIds)
-
-  if (!series) {
-    return (
-      <main className="px-4 py-12 md:px-8 md:py-16 max-w-5xl mx-auto">
-        <p className="text-neutral-500">Match not found.</p>
-      </main>
-    )
-  }
-
-  const gamesWon = games?.filter((g) => g.flop_reset_score > g.opponent_score).length ?? 0
-  const gamesLost = games?.filter((g) => g.flop_reset_score < g.opponent_score).length ?? 0
-  const won = gamesWon > gamesLost
-
-  // MVP for the whole series: highest total score across all games
-  const scoreByPlayer: Record<string, number> = {}
-  playerStats?.forEach((s: any) => {
-    const n = s.players?.name
-    if (!n) return
-    scoreByPlayer[n] = (scoreByPlayer[n] || 0) + (s.score ?? 0)
-  })
-  const seriesMvp = Object.entries(scoreByPlayer).sort((a, b) => b[1] - a[1])[0]
-
-  return (
-    <main className="px-4 py-10 md:px-8 md:py-16 max-w-5xl mx-auto">
-      <Link href="/matches" className="mb-6 inline-block text-sm text-purple-300 hover:underline">← Back to results</Link>
-      <div className={`rounded-2xl border-2 p-8 text-center mb-10 ${won ? 'border-emerald-600' : 'border-red-600'}`}
-        style={{ background: `linear-gradient(135deg, ${won ? 'rgba(52,211,153,0.1)' : 'rgba(239,68,68,0.1)'}, transparent)` }}>
-        <div className="text-xs uppercase tracking-widest text-neutral-500 font-bold mb-4">
-          {(series.teams as any)?.format} • {series.series_date}
-        </div>
-        <div className="flex flex-col items-center justify-center gap-3 mb-3 md:flex-row md:gap-6">
-          <a href={`/teams/${encodeURIComponent((series.teams as any)?.name ?? '')}`} className="text-3xl md:text-4xl font-black text-white hover:underline">{(series.teams as any)?.name}</a>
-          <span className="text-3xl font-black" style={{ color: '#AF69EE' }}>{gamesWon}–{gamesLost}</span>
-          <span className="text-3xl md:text-4xl font-black text-neutral-400">{series.opponent_name}</span>
-        </div>
-        <span className={`text-sm font-bold uppercase px-3 py-1 rounded ${won ? 'bg-emerald-900 text-emerald-300' : 'bg-red-900 text-red-300'}`}>
-          {won ? 'Series Win' : 'Series Loss'}
-        </span>
-        {series.notes && <p className="text-neutral-500 text-sm mt-3">{series.notes}</p>}
-      </div>
-
-      {seriesMvp && (
-        <div className="mb-10 text-center">
-          <span className="text-sm text-neutral-500 uppercase tracking-wide">Series MVP</span>
-          <div className="text-2xl font-bold" style={{ color: '#AF69EE' }}>
-            <a href={`/players/${encodeURIComponent(seriesMvp[0])}`} className="hover:underline">{seriesMvp[0]}</a>
-          </div>
-        </div>
-      )}
-
-      <h2 className="text-2xl font-bold mb-4">Game-by-Game</h2>
-      <div className="space-y-6 mb-12">
-        {games?.map((g, i) => {
-          const gameStats = playerStats?.filter((s: any) => s.match_id === g.match_id) ?? []
-          const gameWon = g.flop_reset_score > g.opponent_score
-          return (
-            <div key={g.match_id} className="rounded-xl bg-[#1b1b1b] border border-neutral-800 p-5">
-              <div className="flex justify-between items-center mb-3">
-                <span className="font-bold">Game {i + 1}{g.round && ` — ${g.round}`}</span>
-                <span className={`text-lg font-black ${gameWon ? 'text-emerald-400' : 'text-red-400'}`}>
-                  {g.flop_reset_score} – {g.opponent_score} {g.is_forfeit && '(forfeit)'}
-                </span>
-              </div>
-              {gameStats.length > 0 && (
-                <div className="overflow-x-auto"><table className="w-full min-w-[560px] text-sm">
-                  <thead>
-                    <tr className="text-neutral-500 text-xs uppercase">
-                      <th className="text-left py-1">Player</th>
-                      <th className="text-left py-1">G</th>
-                      <th className="text-left py-1">A</th>
-                      <th className="text-left py-1">SV</th>
-                      <th className="text-left py-1">SH</th>
-                      <th className="text-left py-1">Score</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {gameStats.map((s: any, j: number) => (
-                      <tr key={j} className="border-t border-neutral-800">
-                        <td className="py-1">
-                          <a href={`/players/${encodeURIComponent(s.players?.name)}`} className="hover:underline font-semibold">
-                            {s.players?.name}
-                          </a>
-                          {s.mvp && <span className="text-purple-400 ml-2 text-xs">MVP</span>}
-                        </td>
-                        <td className="py-1">{s.goals}</td>
-                        <td className="py-1">{s.assists}</td>
-                        <td className="py-1">{s.saves}</td>
-                        <td className="py-1">{s.shots}</td>
-                        <td className="py-1">{s.score}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table></div>
-              )}
-            </div>
-          )
-        })}
-      </div>
-    </main>
-  )
+export default async function MatchCenter({params}:{params:Promise<{id:string}>}){
+  const{id}=await params,seriesId=Number(id)
+  const{data:series}=await supabase.from('series').select('series_id, competition_id, flop_reset_team_id, opponent_name, series_date, best_of, notes, teams ( name, format ), competitions ( name )').eq('series_id',seriesId).maybeSingle()
+  if(!series)return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="Match not found" description="This series is not available in the competitive archive." actionHref="/matches" actionLabel="Back to results"/></main>
+  const[{data:games},{data:rivalrySeries},{data:allStats}]=await Promise.all([
+    supabase.from('matches').select('match_id, flop_reset_score, opponent_score, is_forfeit, round, match_date').eq('series_id',seriesId).order('match_id'),
+    supabase.from('series').select('series_id, series_date, opponent_name, matches ( flop_reset_score, opponent_score )').eq('flop_reset_team_id',series.flop_reset_team_id).ilike('opponent_name',series.opponent_name).order('series_date',{ascending:false}),
+    supabase.from('match_player_stats').select('stat_id, match_id, goals, assists, saves, shots, score, mvp, demos_inflicted, demos_taken, bpm, avg_speed, boost_collected, boost_stolen, players ( name ), matches ( match_date, is_forfeit )'),
+  ])
+  const gameIds=new Set((games??[]).map((g)=>g.match_id)),playerStats=(allStats??[]).filter((s:any)=>gameIds.has(s.match_id))
+  const gamesWon=games?.filter((g)=>g.flop_reset_score>g.opponent_score).length??0,gamesLost=games?.filter((g)=>g.flop_reset_score<g.opponent_score).length??0,won=gamesWon>gamesLost
+  const totals=new Map<string,any>();playerStats.forEach((s:any)=>{const name=s.players?.name??'Unknown',r=totals.get(name)??{name,goals:0,assists:0,saves:0,shots:0,score:0,demos:0,bpm:0,bpmN:0,speed:0,speedN:0};r.goals+=Number(s.goals??0);r.assists+=Number(s.assists??0);r.saves+=Number(s.saves??0);r.shots+=Number(s.shots??0);r.score+=Number(s.score??0);r.demos+=Number(s.demos_inflicted??0);if(s.bpm!=null){r.bpm+=Number(s.bpm);r.bpmN++}if(s.avg_speed!=null){r.speed+=Number(s.avg_speed);r.speedN++}totals.set(name,r)})
+  const players=[...totals.values()],seriesMvp=[...players].sort((a,b)=>b.score-a.score)[0]
+  const teamGoals=players.reduce((a,p)=>a+p.goals,0),teamShots=players.reduce((a,p)=>a+p.shots,0),teamSaves=players.reduce((a,p)=>a+p.saves,0),teamDemos=players.reduce((a,p)=>a+p.demos,0)
+  let rivalryWins=0,rivalryLosses=0,rivalryGameWins=0,rivalryGameLosses=0;(rivalrySeries??[]).forEach((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;rivalryGameWins+=w;rivalryGameLosses+=l;if(w>l)rivalryWins++;else if(l>w)rivalryLosses++})
+  const recordDefs=[['Goals','goals'],['Assists','assists'],['Saves','saves'],['Shots','shots'],['Score','score']] as const
+  const records:any[]=[]
+  for(const[label,key]of recordDefs){const current=[...playerStats].sort((a:any,b:any)=>Number(b[key]??0)-Number(a[key]??0))[0] as any;if(!current||Number(current[key]??0)<=0)continue;const prior=(allStats??[]).filter((s:any)=>!s.matches?.is_forfeit&&s.matches?.match_date&&s.matches.match_date<series.series_date);const previous=Math.max(0,...prior.map((s:any)=>Number(s[key]??0)));if(Number(current[key])>previous)records.push({label,value:Number(current[key]),player:current.players?.name,previous})}
+  const previousMeetings=(rivalrySeries??[]).filter((s:any)=>s.series_id!==seriesId).slice(0,3)
+  return <main className="mx-auto max-w-6xl px-4 py-10 md:px-8 md:py-14"><Link href="/matches" className="mb-6 inline-block text-sm text-purple-300 hover:underline">← Back to results</Link>
+    <header className={`rounded-3xl border-2 p-6 text-center md:p-10 ${won?'border-emerald-700':'border-red-700'}`} style={{background:`radial-gradient(circle at top,${won?'rgba(16,185,129,.13)':'rgba(239,68,68,.13)'},transparent 58%),#101010`}}><div className="text-xs font-black uppercase tracking-[.22em] text-neutral-500">Final · {(series.competitions as any)?.name??'Competition not recorded'} · {(series.teams as any)?.format}{games?.[0]?.round?` · ${games[0].round}`:''}</div><h1 className="mt-7 flex flex-col items-center justify-center gap-4 md:flex-row md:gap-8"><Link href={`/teams/${encodeURIComponent((series.teams as any)?.name??'')}`} className="text-4xl font-black text-white hover:underline md:text-5xl">{(series.teams as any)?.name}</Link><span className="text-5xl font-black text-purple-300">{gamesWon}–{gamesLost}</span><span className="text-4xl font-black text-neutral-400 md:text-5xl">{series.opponent_name}</span></h1><div className="mt-6 flex justify-center"><ResultBadge wins={gamesWon} losses={gamesLost}/></div><div className="mt-3 text-sm text-neutral-500">{series.series_date}</div>{series.notes&&<p className="mt-3 text-sm text-neutral-500">{series.notes}</p>}</header>
+    {seriesMvp&&<section className="mt-8 grid gap-3 sm:grid-cols-2 md:grid-cols-4"><StatCard label="Series MVP" value={<Link href={`/players/${encodeURIComponent(seriesMvp.name)}`} className="text-white hover:underline">{seriesMvp.name}</Link>} detail={`${seriesMvp.score} total score`} accent/><StatCard label="Team Goals" value={teamGoals}/><StatCard label="Team Shooting %" value={teamShots?`${(teamGoals/teamShots*100).toFixed(1)}%`:'—'} detail={`${teamGoals} goals / ${teamShots} shots`}/><StatCard label="Saves / Demos" value={`${teamSaves} / ${teamDemos}`}/></section>}
+    {records.length>0&&<section className="mt-12"><SectionHeader eyebrow="Historical impact" title="Records Broken in This Series" description="Compared against every non-forfeit performance recorded before this series date."/><div className="grid gap-4 md:grid-cols-2">{records.map((r)=><Link key={r.label} href="/records" className="rounded-2xl border border-amber-900/50 bg-amber-950/10 p-5 text-white no-underline hover:border-amber-700"><div className="text-xs font-black uppercase text-amber-400">New Flop Reset Record</div><div className="mt-2 text-3xl font-black">{r.value} {r.label}</div><div className="mt-1 text-lg text-purple-300">{r.player}</div><div className="mt-3 text-xs text-neutral-600">Previous mark: {r.previous||'No prior positive mark'}</div></Link>)}</div></section>}
+    <section className="mt-12"><SectionHeader eyebrow="Series performance" title="Series Leaders"/><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">{([['Goals','goals'],['Assists','assists'],['Saves','saves'],['Score','score']] as const).map(([label,key])=>{const best=[...players].sort((a,b)=>b[key]-a[key])[0];return <article key={key} className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs font-bold uppercase text-neutral-500">{label}</div><div className="mt-2 text-3xl font-black text-purple-300">{best?.[key]??0}</div>{best&&<Link href={`/players/${encodeURIComponent(best.name)}`} className="mt-2 inline-block font-bold text-white hover:underline">{best.name}</Link>}</article>})}</div></section>
+    <section className="mt-12"><SectionHeader eyebrow="Game breakdown" title="Game by Game" description="Open each game for the full Flop Reset player box score."/><div className="space-y-4">{games?.map((g,index)=>{const rows=playerStats.filter((s:any)=>s.match_id===g.match_id),gameWon=g.flop_reset_score>g.opponent_score;return <details key={g.match_id} className="group rounded-2xl border border-neutral-800 bg-[#111]"><summary className="flex cursor-pointer list-none items-center justify-between gap-4 p-5"><div><div className="font-bold text-white">Game {index+1}{g.round?` · ${g.round}`:''}</div><div className="text-xs text-neutral-600">{g.match_date}</div></div><span className={`text-xl font-black ${gameWon?'text-emerald-400':'text-red-400'}`}>{gameWon?'W':'L'} {g.flop_reset_score}–{g.opponent_score}{g.is_forfeit?' · FORFEIT':''}</span></summary><div className="overflow-x-auto border-t border-neutral-800"><table className="min-w-[860px] text-sm"><thead><tr className="bg-[#191919] text-left text-xs uppercase text-neutral-500"><th className="px-4 py-3">Player</th><th>G</th><th>A</th><th>SV</th><th>SH</th><th>SH%</th><th>Score</th><th>Demos</th><th>BPM</th><th>Avg Speed</th></tr></thead><tbody>{rows.map((s:any)=><tr key={s.stat_id} className="border-t border-neutral-800"><td className="px-4 py-3"><Link href={`/players/${encodeURIComponent(s.players?.name)}`} className="font-bold text-white hover:underline">{s.players?.name}</Link>{s.mvp&&<span className="ml-2 text-xs text-purple-400">MVP</span>}</td><td>{s.goals}</td><td>{s.assists}</td><td>{s.saves}</td><td>{s.shots}</td><td>{Number(s.shots)>0?`${(Number(s.goals)/Number(s.shots)*100).toFixed(1)}%`:'—'}</td><td>{s.score}</td><td>{s.demos_inflicted??'—'}</td><td>{s.bpm!=null?Number(s.bpm).toFixed(0):'—'}</td><td>{s.avg_speed!=null?Number(s.avg_speed).toFixed(0):'—'}</td></tr>)}</tbody></table></div></details>})}</div></section>
+    <section className="mt-12 grid gap-6 lg:grid-cols-2"><div><SectionHeader eyebrow="Opponent context" title={`vs ${series.opponent_name}`}/><div className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="grid grid-cols-2 gap-3"><StatCard label="Series Record" value={`${rivalryWins}–${rivalryLosses}`}/><StatCard label="Game Record" value={`${rivalryGameWins}–${rivalryGameLosses}`}/></div><Link href={`/rivalries/${encodeURIComponent(series.opponent_name)}`} className="mt-4 inline-block text-sm text-purple-300 hover:underline">Explore rivalry history →</Link></div></div><div><SectionHeader eyebrow="Earlier meetings" title="Previous Series"/>{previousMeetings.length?<div className="space-y-3">{previousMeetings.map((s:any)=>{const w=s.matches?.filter((m:any)=>m.flop_reset_score>m.opponent_score).length??0,l=s.matches?.filter((m:any)=>m.flop_reset_score<m.opponent_score).length??0;return <Link key={s.series_id} href={`/matches/${s.series_id}`} className="flex items-center justify-between rounded-xl border border-neutral-800 bg-[#111] p-4 text-white no-underline hover:border-purple-800"><div className="text-sm"><div className="font-bold">{s.series_date}</div><div className="text-neutral-600">vs {s.opponent_name}</div></div><ResultBadge wins={w} losses={l}/></Link>})}</div>:<EmptyState title="First recorded meeting" description="No earlier series against this opponent is stored for this squad."/>}</div></section>
+  </main>
 }

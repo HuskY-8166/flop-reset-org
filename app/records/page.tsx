@@ -8,7 +8,7 @@ import {
   rankProcessSkill,
   type ProcessPlayer,
 } from '@/lib/processSkills'
-import { getGameOutcome } from '@/lib/results'
+import { countsAsPlayedGame, getGameOutcome } from '@/lib/results'
 
 export const dynamic = 'force-dynamic'
 
@@ -109,9 +109,9 @@ function RecordCard({ record }: { record: BookRecord }) {
       {h.distance && <div className="mt-1 text-xs text-amber-400/70">{h.distance}</div>}
     </div>
   }
-  return <article className="rounded-2xl border border-neutral-800 bg-[#111] p-5 shadow-xl shadow-black/10">
-    <div className="text-xs font-bold uppercase tracking-wider text-neutral-500">{record.label}</div>
-    <div className="mt-2 text-4xl font-black text-[#AF69EE]">{record.value}</div>
+  return <article className="min-w-0 rounded-2xl border border-neutral-800 bg-[#111] p-5 shadow-xl shadow-black/10">
+    <div className="break-words text-xs font-bold uppercase tracking-wider text-neutral-500">{record.label}</div>
+    <div className="mt-2 break-words text-4xl font-black text-[#AF69EE]">{record.value}</div>
     <div className="mt-5 space-y-3">{!record.holders.length ? <p className="text-sm text-neutral-600">No reliable data in this format yet.</p>
       : !record.leaderboard && record.holders.length > 1 ? <details><summary className="cursor-pointer text-sm font-semibold text-purple-300">{record.holders.length} performances tied · View performances</summary><div className="mt-4 space-y-3">{record.holders.map(renderHolder)}</div></details>
       : record.holders.map(renderHolder)}</div>
@@ -266,7 +266,7 @@ export default async function Records({ searchParams }: { searchParams: Promise<
     }
   }
   timeline.sort((a,b) => (b.date ?? '').localeCompare(a.date ?? ''))
-  const uniqueGames = new Set(allSeries.flatMap((row) => row.matches ?? []).map((match) => match.match_id)).size
+  const uniqueGames = new Set(allSeries.flatMap((row) => row.matches ?? []).filter(countsAsPlayedGame).map((match) => match.match_id)).size
   const uniquePlayers = new Set(allStats.map((s) => s.players?.name).filter(Boolean)).size
   const uniqueTeams = new Set(allStats.map((s) => `${s.matches?.teams?.name}|${s.matches?.teams?.format}`)).size
   const earliestStat = allStats.map((s) => s.matches?.match_date ?? '').filter(Boolean).sort()[0]
@@ -289,8 +289,8 @@ export default async function Records({ searchParams }: { searchParams: Promise<
   const latestActivity = latestRecord ? timeline.filter((entry) => entry.date?.slice(0, 10) === latestRecord.date?.slice(0, 10)) : []
 
   const grid = (records: BookRecord[]) => <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{records.map((r) => <RecordCard key={r.label} record={r} />)}</div>
-  return <main className="mx-auto max-w-7xl px-4 py-10 md:px-8 md:py-16">
-    <header className="rounded-3xl border border-purple-900/40 bg-[radial-gradient(circle_at_top_right,rgba(175,105,238,.2),transparent_38%),linear-gradient(135deg,#18131d,#0d0d0d_62%)] p-6 md:p-10">
+  return <main className="mx-auto w-full min-w-0 max-w-7xl px-4 py-10 md:px-8 md:py-16">
+    <header className="min-w-0 rounded-3xl border border-purple-900/40 bg-[radial-gradient(circle_at_top_right,rgba(175,105,238,.2),transparent_38%),linear-gradient(135deg,#18131d,#0d0d0d_62%)] p-6 md:p-10">
       <div className="text-xs font-black uppercase tracking-[.28em] text-purple-400">Flop Reset</div><h1 className="mt-3 text-4xl font-black text-white md:text-7xl">RECORD BOOK</h1><p className="mt-3 text-neutral-400 md:text-lg">Competitive history since {earliestCompetition ? fmtDate(earliestCompetition) : 'the archive began'}; player-stat coverage is tracked separately.</p>
       <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">{[['Competitive Games',uniqueGames],['Competitive Series',allSeries.length],['Players Recorded',uniquePlayers],['Recorded Squads',uniqueTeams],['History Since',earliestCompetition ? fmtDate(earliestCompetition) : '—'],['Player Stats Since',earliestStat ? fmtDate(earliestStat) : '—']].map(([label,value]) => <div key={label} className="rounded-xl border border-white/10 bg-black/20 p-4"><div className="text-xs uppercase text-neutral-500">{label}</div><div className="mt-1 text-xl font-black text-white">{value}</div></div>)}</div>
       <div className="mt-4 grid gap-3 md:grid-cols-3">
@@ -300,7 +300,7 @@ export default async function Records({ searchParams }: { searchParams: Promise<
       </div>
     </header>
     <nav className="my-8 flex flex-wrap gap-2">{['All',...formats].map((f) => <Link key={f} href={f === 'All' ? '/records' : `/records?format=${encodeURIComponent(f)}`} className={`rounded-full px-4 py-2 text-sm font-bold ${selected === f ? 'bg-purple-700 text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>{f}</Link>)}</nav>
-    <nav className="sticky top-0 z-20 -mx-4 mb-12 overflow-x-auto border-y border-neutral-800 bg-[#0b0b0b]/95 px-4 py-3 backdrop-blur md:mx-0 md:rounded-xl md:border">
+    <nav className="sticky top-0 z-20 mb-12 max-w-full min-w-0 overflow-x-auto rounded-xl border border-neutral-800 bg-[#0b0b0b]/95 px-4 py-3 backdrop-blur">
       <div className="flex min-w-max gap-5 text-xs font-bold uppercase tracking-wider text-neutral-500">{[['overview','Overview'],['career','Career'],['game','Game'],['series','Series'],['team','Team'],['process','Process'],['history','History']].map(([id,label]) => <a key={id} href={`#${id}`} className="hover:text-purple-300">{label}</a>)}</div>
     </nav>
     <section id="overview" className="mb-16 scroll-mt-20"><Heading overline="Latest milestones" title="Recent Record Activity" copy="Only meaningful new marks proven with date-level chronology. Same-day intra-event order is never inferred." /><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{timeline.slice(0,6).map((e) => <article key={`${e.category}-${e.id}`} className="rounded-2xl border border-purple-900/40 bg-[#111] p-5"><div className="text-xs font-black text-amber-400">NEW ORG RECORD</div><div className="mt-2 text-sm text-neutral-500">{e.category}</div><div className="mt-1 text-3xl font-black text-white">{fmt(e.value)} · {e.name}</div><div className="mt-3 text-sm text-neutral-400">{e.team} · {e.format}<br/>vs {e.opponent} · {fmtDate(e.date)}</div>{e.jointNames.length > 1 && <div className="mt-2 text-xs text-purple-300">Joint same-day record</div>}{e.previousValue !== undefined && <div className="mt-4 border-t border-neutral-800 pt-3 text-xs text-neutral-500">Previous record: {fmt(e.previousValue)}{e.previousNames?.length ? ` · ${e.previousNames.join(', ')}` : ''}<br/><span className="text-amber-400">+{fmt(e.value-e.previousValue)} over previous mark</span></div>}</article>)}</div></section>

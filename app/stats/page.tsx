@@ -60,6 +60,15 @@ type AggregateRow = Row & {
   }
 }
 
+type TrackingSample = {
+  team: string
+  format: string
+  basic: boolean
+  positioning: boolean
+  movement: boolean
+  zeroBoost: boolean
+}
+
 type SortKey =
   | 'name'
   | 'team'
@@ -89,6 +98,7 @@ function hasValue(value: unknown) {
 
 export default function Stats() {
   const [rows, setRows] = useState<Row[]>([])
+  const [trackingSamples, setTrackingSamples] = useState<TrackingSample[]>([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
 
@@ -164,10 +174,21 @@ export default function Stats() {
 
       if (error) {
         console.error(error)
-        setLoadError(error.message)
+        setLoadError('Something went wrong while loading player statistics. Please try again shortly.')
         setLoading(false)
         return
       }
+
+      setTrackingSamples((full ?? [])
+        .filter((stat: any) => !stat.matches?.is_forfeit)
+        .map((stat: any) => ({
+          team: stat.matches?.teams?.name ?? 'Unknown',
+          format: stat.matches?.teams?.format ?? 'Unknown',
+          basic: hasValue(stat.bpm) || hasValue(stat.avg_speed) || hasValue(stat.demos_inflicted) || hasValue(stat.boost_collected),
+          positioning: hasValue(stat.percentage_defensive_third) || hasValue(stat.percentage_most_back) || hasValue(stat.percentage_defensive_half) || hasValue(stat.avg_distance_to_ball),
+          movement: hasValue(stat.percentage_supersonic_speed) || hasValue(stat.percentage_low_air) || hasValue(stat.percentage_high_air),
+          zeroBoost: hasValue(stat.zero_boost_pct),
+        })))
 
       const byPlayer: Record<string, AggregateRow> = {}
 
@@ -821,6 +842,21 @@ export default function Stats() {
     [processPlayers]
   )
 
+  const trackingCoverage = useMemo(() => {
+    const samples = trackingSamples.filter((sample) =>
+      (teamFilter === 'All' || sample.team === teamFilter) &&
+      (formatFilter === 'All' || sample.format === formatFilter)
+    )
+
+    return {
+      total: samples.length,
+      basic: samples.filter((sample) => sample.basic).length,
+      positioning: samples.filter((sample) => sample.positioning).length,
+      movement: samples.filter((sample) => sample.movement).length,
+      zeroBoost: samples.filter((sample) => sample.zeroBoost).length,
+    }
+  }, [formatFilter, teamFilter, trackingSamples])
+
   const eligibilityThreshold = useMemo(
     () =>
       getEligibilityThreshold(
@@ -1062,7 +1098,7 @@ export default function Stats() {
   // ---------------------------------------------------------------------------
 
   return (
-    <main className="px-4 md:px-8 py-12 max-w-7xl mx-auto">
+    <main className="mx-auto w-full min-w-0 max-w-7xl px-4 py-12 md:px-8">
       <h1 className="text-5xl md:text-6xl font-black tracking-tight mb-2">
         Stats &{' '}
         <span
@@ -1211,7 +1247,7 @@ export default function Stats() {
         view === 'box' &&
         filteredBox.length >
           0 && (
-          <div className="overflow-x-auto rounded-xl border border-neutral-800">
+          <div className="max-w-full min-w-0 overflow-x-auto rounded-xl border border-neutral-800">
             <table className="w-full text-sm min-w-[1200px]">
               <thead>
                 <tr className="bg-[#1b1b1b] text-neutral-400 text-xs uppercase tracking-wide">
@@ -1402,6 +1438,23 @@ export default function Stats() {
           0 && (
           <div className="space-y-8">
 
+            <section className="grid gap-4 md:grid-cols-2" aria-label="Process tracking coverage">
+              <div className="rounded-xl border border-neutral-800 bg-[#111111] p-5">
+                <div className="text-xs font-bold uppercase tracking-wide text-neutral-500">Basic Tracking</div>
+                <div className="mt-2 text-3xl font-black text-white">{trackingCoverage.basic} / {trackingCoverage.total}</div>
+                <p className="mt-2 text-sm text-neutral-500">Player-game samples containing BPM, speed, demos, or boost collection.</p>
+              </div>
+              <div className="rounded-xl border border-neutral-800 bg-[#111111] p-5">
+                <div className="text-xs font-bold uppercase tracking-wide text-neutral-500">Advanced Tracking</div>
+                <div className="mt-2 grid grid-cols-3 gap-3 text-sm">
+                  <div><div className="text-2xl font-black text-white">{trackingCoverage.movement}</div><div className="text-neutral-500">Movement</div></div>
+                  <div><div className="text-2xl font-black text-white">{trackingCoverage.positioning}</div><div className="text-neutral-500">Positioning</div></div>
+                  <div><div className="text-2xl font-black text-white">{trackingCoverage.zeroBoost}</div><div className="text-neutral-500">Zero Boost</div></div>
+                </div>
+                <p className="mt-3 text-xs text-neutral-600">Out of {trackingCoverage.total} non-forfeit player-game samples. Missing fields remain unavailable, never zero.</p>
+              </div>
+            </section>
+
             {/* PROCESS SKILLS MEDALS */}
 
             <section className="rounded-xl border border-neutral-800 bg-[#111111] overflow-hidden">
@@ -1442,7 +1495,7 @@ export default function Stats() {
                 </div>
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="max-w-full min-w-0 overflow-x-auto">
                 <table className="w-full min-w-[850px] text-sm">
                   <thead>
                     <tr className="bg-[#1b1b1b] text-neutral-400 text-xs uppercase tracking-wide">
@@ -1560,7 +1613,7 @@ export default function Stats() {
                   </p>
                 </div>
 
-                <div className="overflow-x-auto">
+                <div className="max-w-full min-w-0 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-[#1b1b1b] text-neutral-400 text-xs uppercase tracking-wide">
@@ -1687,7 +1740,7 @@ export default function Stats() {
                         }
                       </h3>
 
-                      <div className="overflow-x-auto">
+                      <div className="max-w-full min-w-0 overflow-x-auto">
                         <table className="w-full text-sm">
                           <thead>
                             <tr className="text-xs uppercase tracking-wide text-neutral-500">
@@ -1801,7 +1854,7 @@ export default function Stats() {
                   </p>
                 </div>
 
-                <div className="overflow-x-auto">
+                <div className="max-w-full min-w-0 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-[#1b1b1b] text-neutral-400 text-xs uppercase tracking-wide">

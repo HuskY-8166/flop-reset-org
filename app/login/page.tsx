@@ -15,9 +15,13 @@ export default function Login() {
     e.preventDefault()
     setSubmitting(true)
     setMessage('')
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
     if (error) {
       setMessage(error.message)
+      setSubmitting(false)
+    } else if (data.user?.app_metadata?.site_admin !== true) {
+      await supabase.auth.signOut()
+      setMessage('This account is authenticated but does not have Flop Reset Site Admin permission.')
       setSubmitting(false)
     } else {
       router.push('/admin')

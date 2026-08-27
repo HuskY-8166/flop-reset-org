@@ -10,7 +10,7 @@ export default async function Teams() {
       name,
       format,
       captain,
-      players ( name )
+      players ( name, status )
     `)
     .order('name')
 
@@ -41,7 +41,7 @@ export default async function Teams() {
             </div>
             {team.captain && <p className="text-sm text-neutral-400 mb-4">Captain: {team.captain}</p>}
             <ul className="space-y-1">
-              {(team.players as any)?.map((p: any, i: number) => (
+              {(team.players as any)?.filter((p: any) => !p.status || p.status === 'active').map((p: any, i: number) => (
                 <li key={i}>
                   <a
                     href={`/players/${encodeURIComponent(p.name)}`}
@@ -61,7 +61,7 @@ export default async function Teams() {
   return (
     <main className="px-4 py-10 md:px-8 md:py-14 max-w-6xl mx-auto">
       <div className="mb-10 rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9"><div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">Competitive squads</div><h1 className="mt-2 text-4xl font-bold md:text-6xl">Our <span style={{ color: '#AF69EE' }}>Teams</span></h1><p className="mt-2 text-neutral-400">Meet the players representing Flop Reset in each recorded format.</p></div>
-      {error && <p>Error: {error.message}</p>}
+      {error && <div className="rounded-xl border border-red-900 bg-red-950/20 p-4 text-red-300">Something went wrong while loading the teams. Please try again shortly.</div>}
 
       <h2 className="text-xl font-semibold text-neutral-300 mb-4 border-b border-neutral-800 pb-2">3v3</h2>
       <TeamGrid list={teams3v3} />

@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import { Geist, Geist_Mono, Rajdhani, Teko } from 'next/font/google'
 import { SiteNav } from '@/components/SiteNav'
+import { BUILD_NUMBER } from '@/lib/build'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -15,10 +16,13 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${rajdhani.variable} ${teko.variable} h-full antialiased`}>
+    <html lang="en" data-scroll-behavior="smooth" className={`${geistSans.variable} ${geistMono.variable} ${rajdhani.variable} ${teko.variable} h-full antialiased`}>
       <body className="flex min-h-full flex-col">
         <SiteNav />
         {children}
+        <footer className="mt-auto px-4 py-5 text-center text-[10px] font-medium uppercase tracking-[0.22em] text-neutral-700">
+          Flop Reset · Build {BUILD_NUMBER}
+        </footer>
       </body>
     </html>
   )

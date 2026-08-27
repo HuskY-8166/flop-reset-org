@@ -3,10 +3,28 @@
 
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import Papa from 'papaparse'
 import { supabase } from '@/lib/supabase'
+import { PlayoffAdminEditor } from '@/components/PlayoffAdminEditor'
+import { LeagueDirectoryAdmin, LeagueDirectoryHealth } from '@/components/LeagueDirectoryAdmin'
 import { parseLeagueMatches } from '@/lib/parseLeagueMatches'
 import { formatCompetitionAdminLabel } from '@/lib/competitions'
+import { formatPublicDate } from '@/lib/results'
+import {
+  expectedPlayersForFormat,
+  identifyReplaySides,
+  normalizeImportIdentity,
+  resolveRosterIdentity,
+} from '@/lib/importValidation'
+import {
+  detectBallchasingFile,
+  getPlayersCsvCoverage,
+  mapPlayersCsvRow,
+  nonNullUpdate,
+  type PlayerSummaryRow,
+  type TrackingCoverage,
+} from '@/lib/ballchasingImport'
 
 type Competition = {
   id: number
@@ -20,11 +38,87 @@ type RosterPlayer = {
   aliases?: string[] | null
 }
 
+type TeamRegistration = {
+  id: number
+  name: string
+  format: string
+}
+
 type Game = {
   replayId: string
   date: string
-  ourGoals: number
-  theirGoals: number
+  ourGoals: number | null
+  theirGoals: number | null
+  error?: string
+}
+
+type PlayerMapping = {
+  rawName: string
+  canonicalName: string
+}
+
+type ImportValidation = {
+  errors: string[]
+  warnings: string[]
+  expectedFrRows: number
+  resolvedFrRows: number
+  opponentRows: number
+  replayIds: number
+  coverage: TrackingCoverage
+}
+
+type RebuildHealth = {
+  loading: boolean
+  error: string
+  counts: {
+    competitions: number
+    teams: number
+    players: number
+    opponents: number
+    series: number
+    matches: number
+    playerStats: number
+    leagueMatches: number
+    scheduledMatches: number
+    playoffBrackets: number
+    playoffMatches: number
+    forfeits: number
+    playedGames: number
+    replayIds: number
+    duplicateReplayIds: number
+    teamsRepresented: number
+    advancedRows: number
+    orphanPlayerRows: number
+    wrongPlayerRowGames: number
+    seriesWithoutGames: number
+    playedGamesWithoutStats: number
+    forfeitGameRows: number
+  }
+  checks: {
+    competitionMismatches: number
+    playerAliasesValid: boolean
+    opponentAliasesValid: boolean
+    structuralTablesValid: boolean
+  }
+}
+
+const EMPTY_REBUILD_HEALTH: RebuildHealth = {
+  loading: true,
+  error: '',
+  counts: {
+    competitions: 0, teams: 0, players: 0, opponents: 0, series: 0,
+    matches: 0, playerStats: 0, leagueMatches: 0, scheduledMatches: 0,
+    playoffBrackets: 0, playoffMatches: 0, forfeits: 0, playedGames: 0,
+    replayIds: 0, duplicateReplayIds: 0, teamsRepresented: 0, advancedRows: 0,
+    orphanPlayerRows: 0, wrongPlayerRowGames: 0, seriesWithoutGames: 0,
+    playedGamesWithoutStats: 0, forfeitGameRows: 0,
+  },
+  checks: {
+    competitionMismatches: 0,
+    playerAliasesValid: false,
+    opponentAliasesValid: false,
+    structuralTablesValid: false,
+  },
 }
 
 type PlayerStat = {
@@ -259,8 +353,18 @@ export default function Admin() {
     'import' |
     'schedule' |
     'rankings' |
-    'manage'
+    'playoffs' |
+    'directory' |
+    'manage' |
+    'rebuild'
   >('add')
+
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get('tab')
+    if (requested === 'add' || requested === 'import' || requested === 'schedule' || requested === 'rankings' || requested === 'playoffs' || requested === 'directory' || requested === 'manage' || requested === 'rebuild') {
+      setTab(requested)
+    }
+  }, [])
 
   // ---------------------------------------------------------------------------
   // Shared
@@ -268,6 +372,9 @@ export default function Admin() {
 
   const [competitions, setCompetitions] =
     useState<Competition[]>([])
+
+  const [teamRegistrations, setTeamRegistrations] =
+    useState<TeamRegistration[]>([])
 
   // ---------------------------------------------------------------------------
   // Add Result
@@ -338,10 +445,26 @@ export default function Admin() {
   const [importMessage, setImportMessage] =
     useState('')
 
-  const [
-    unmatchedPlayers,
-    setUnmatchedPlayers,
-  ] = useState<string[]>([])
+  const [resolvedPlayers, setResolvedPlayers] = useState<PlayerMapping[]>([])
+  const [opponentPlayers, setOpponentPlayers] = useState<string[]>([])
+  const [unresolvedPlayers, setUnresolvedPlayers] = useState<string[]>([])
+  const [importValidation, setImportValidation] = useState<ImportValidation>({
+    errors: ['Upload Ballchasing players-games.csv to begin validation.'],
+    warnings: [],
+    expectedFrRows: 0,
+    resolvedFrRows: 0,
+    opponentRows: 0,
+    replayIds: 0,
+    coverage: { total: 0, basic: 0, movement: 0, positioning: 0, zeroBoost: 0 },
+  })
+
+  const [playersSummaryFile, setPlayersSummaryFile] = useState('')
+  const [playersSummaryRows, setPlayersSummaryRows] = useState<PlayerSummaryRow[]>([])
+  const [playersSummaryCoverage, setPlayersSummaryCoverage] = useState<TrackingCoverage>({
+    total: 0, basic: 0, movement: 0, positioning: 0, zeroBoost: 0,
+  })
+  const [playersSummaryErrors, setPlayersSummaryErrors] = useState<string[]>([])
+  const [playersSummaryReady, setPlayersSummaryReady] = useState(false)
 
   const [importMode, setImportMode] =
     useState<ImportMode>('new')
@@ -412,6 +535,15 @@ export default function Admin() {
   const [prFormat, setPrFormat] =
     useState('3v3')
 
+  const [prCompetitionId, setPrCompetitionId] =
+    useState('')
+
+  const [prScopeAvailable, setPrScopeAvailable] =
+    useState(false)
+
+  const [prAudit, setPrAudit] =
+    useState({ newMatches: 0, duplicates: 0, conflicts: 0, teams: 0, forfeits: 0, rounds: 0 })
+
   const [prText, setPrText] =
     useState('')
 
@@ -443,6 +575,8 @@ export default function Admin() {
 
   const [mvpMatchId, setMvpMatchId] =
     useState('')
+
+  const [rebuildHealth, setRebuildHealth] = useState<RebuildHealth>(EMPTY_REBUILD_HEALTH)
 
   const [
     mvpCandidates,
@@ -695,6 +829,131 @@ export default function Admin() {
     )
   }
 
+  async function loadRebuildHealth() {
+    setRebuildHealth((current) => ({ ...current, loading: true, error: '' }))
+
+    const countTable = (table: string) =>
+      supabase.from(table).select('*', { count: 'exact', head: true })
+
+    const [
+      competitionsCount, teamsCount, playersCount, opponentsCount,
+      seriesCount, matchesCount, statsCount, leagueCount, scheduleCount,
+      bracketsCount, playoffMatchesCount, seriesRows, matchRows, statRows,
+      playerRows, opponentRows, opponentAliasRows,
+    ] = await Promise.all([
+      countTable('competitions'), countTable('teams'), countTable('players'), countTable('opponents'),
+      countTable('series'), countTable('matches'), countTable('match_player_stats'), countTable('league_matches'),
+      countTable('scheduled_matches'), countTable('playoff_brackets'), countTable('playoff_matches'),
+      supabase.from('series').select('series_id, flop_reset_team_id, notes, competitions(format), teams(format)'),
+      supabase.from('matches').select('match_id, series_id, is_forfeit, replay_id, match_date, teams(format)'),
+      supabase.from('match_player_stats').select('match_id, percentage_supersonic_speed, percentage_most_back, percentage_defensive_half, percentage_defensive_third, avg_distance_to_ball, zero_boost_pct'),
+      supabase.from('players').select('name, aliases').in('name', ['aktionrl', 'droll', 'HuskY']),
+      supabase.from('opponents').select('opponent_id, normalized_name').in('normalized_name', ['ohio midlads', 'sbc blue angels']),
+      supabase.from('opponent_aliases').select('opponent_id, normalized_alias').in('normalized_alias', ['midlads', 'sbc angels']),
+    ])
+
+    const failures = [
+      competitionsCount, teamsCount, playersCount, opponentsCount, seriesCount,
+      matchesCount, statsCount, leagueCount, scheduleCount, bracketsCount,
+      playoffMatchesCount, seriesRows, matchRows, statRows, playerRows,
+      opponentRows, opponentAliasRows,
+    ].flatMap((result) => result.error ? [result.error.message] : [])
+
+    const seriesData = (seriesRows.data ?? []) as any[]
+    const matchesData = (matchRows.data ?? []) as any[]
+    const statsData = (statRows.data ?? []) as any[]
+    const replayCounts = new Map<string, number>()
+    const playerRowsByMatch = new Map<number, number>()
+    for (const row of statsData) {
+      playerRowsByMatch.set(Number(row.match_id), (playerRowsByMatch.get(Number(row.match_id)) ?? 0) + 1)
+    }
+    for (const row of matchesData) {
+      if (row.replay_id) replayCounts.set(row.replay_id, (replayCounts.get(row.replay_id) ?? 0) + 1)
+    }
+    const legacyForfeitSeries = new Set(
+      matchesData.filter((row) => row.is_forfeit && row.series_id !== null).map((row) => Number(row.series_id)),
+    )
+    for (const row of seriesData) {
+      if (String(row.notes ?? '').toLocaleLowerCase('en-US').includes('forfeit')) {
+        legacyForfeitSeries.add(Number(row.series_id))
+      }
+    }
+
+    const aliasesByPlayer = new Map(
+      ((playerRows.data ?? []) as any[]).map((row) => [row.name, new Set(row.aliases ?? [])]),
+    )
+    const opponentIds = new Map(
+      ((opponentRows.data ?? []) as any[]).map((row) => [row.normalized_name, Number(row.opponent_id)]),
+    )
+    const aliasesByOpponent = new Map(
+      ((opponentAliasRows.data ?? []) as any[]).map((row) => [row.normalized_alias, Number(row.opponent_id)]),
+    )
+    const playerAliasesValid = aliasesByPlayer.get('aktionrl')?.has('AkTION') === true &&
+      aliasesByPlayer.get('droll')?.has('Drollotov') === true &&
+      aliasesByPlayer.get('HuskY')?.has('HuskY.G2') === true
+    const opponentAliasesValid = opponentIds.get('ohio midlads') === aliasesByOpponent.get('midlads') &&
+      opponentIds.get('sbc blue angels') === aliasesByOpponent.get('sbc angels')
+    const competitionMismatches = seriesData.filter((row) => {
+      const competition = Array.isArray(row.competitions) ? row.competitions[0] : row.competitions
+      const team = Array.isArray(row.teams) ? row.teams[0] : row.teams
+      return competition?.format !== team?.format
+    }).length
+    const advancedRows = statsData.filter((row) => [
+      row.percentage_supersonic_speed,
+      row.percentage_most_back,
+      row.percentage_defensive_half,
+      row.percentage_defensive_third,
+      row.avg_distance_to_ball,
+      row.zero_boost_pct,
+    ].some((value) => value !== null && value !== undefined)).length
+
+    const counts = {
+      competitions: competitionsCount.count ?? 0,
+      teams: teamsCount.count ?? 0,
+      players: playersCount.count ?? 0,
+      opponents: opponentsCount.count ?? 0,
+      series: seriesCount.count ?? 0,
+      matches: matchesCount.count ?? 0,
+      playerStats: statsCount.count ?? 0,
+      leagueMatches: leagueCount.count ?? 0,
+      scheduledMatches: scheduleCount.count ?? 0,
+      playoffBrackets: bracketsCount.count ?? 0,
+      playoffMatches: playoffMatchesCount.count ?? 0,
+      forfeits: legacyForfeitSeries.size,
+      playedGames: matchesData.filter((row) => !row.is_forfeit && row.series_id !== null).length,
+      replayIds: matchesData.filter((row) => Boolean(row.replay_id)).length,
+      duplicateReplayIds: [...replayCounts.values()].filter((count) => count > 1).length,
+      teamsRepresented: new Set(seriesData.map((row) => row.flop_reset_team_id).filter(Boolean)).size,
+      advancedRows,
+      orphanPlayerRows: statsData.filter((row) => !matchesData.some((match) => Number(match.match_id) === Number(row.match_id))).length,
+      wrongPlayerRowGames: matchesData.filter((row) => {
+        if (row.is_forfeit) return false
+        const team = Array.isArray(row.teams) ? row.teams[0] : row.teams
+        const expected = team?.format === '3v3' ? 3 : team?.format === '2v2' ? 2 : 0
+        return expected > 0 && (playerRowsByMatch.get(Number(row.match_id)) ?? 0) !== expected
+      }).length,
+      seriesWithoutGames: seriesData.filter((series) =>
+        !String(series.notes ?? '').toLocaleLowerCase('en-US').includes('forfeit') &&
+        !matchesData.some((match) => Number(match.series_id) === Number(series.series_id)),
+      ).length,
+      playedGamesWithoutStats: matchesData.filter((row) => !row.is_forfeit && !playerRowsByMatch.has(Number(row.match_id))).length,
+      forfeitGameRows: matchesData.filter((row) => row.is_forfeit).length,
+    }
+
+    setRebuildHealth({
+      loading: false,
+      error: [...new Set(failures)].join(' · '),
+      counts,
+      checks: {
+        competitionMismatches,
+        playerAliasesValid,
+        opponentAliasesValid,
+        structuralTablesValid: counts.competitions > 0 && counts.teams > 0 &&
+          counts.players > 0 && counts.opponents > 0,
+      },
+    })
+  }
+
   // ---------------------------------------------------------------------------
   // Initial load
   // ---------------------------------------------------------------------------
@@ -704,7 +963,7 @@ export default function Admin() {
       .getSession()
       .then(
         ({ data }) => {
-          if (!data.session) {
+          if (!data.session || data.session.user.app_metadata?.site_admin !== true) {
             router.push('/login')
           }
         }
@@ -731,19 +990,46 @@ export default function Admin() {
 
       setCompetitions(list)
 
+      const { data: teamData, error: teamsError } = await supabase
+        .from('teams')
+        .select('id, name, format')
+        .order('id')
+
+      if (teamsError) {
+        console.error(teamsError)
+        return
+      }
+
+      const registrations = (teamData ?? []) as TeamRegistration[]
+      setTeamRegistrations(registrations)
+
       if (list.length) {
         const firstId =
           String(list[0].id)
 
         setCompetitionId(firstId)
-        setImportCompetitionId(firstId)
+        const importDefault = list.find((competition) =>
+          registrations.some((team) =>
+            team.name === 'Frameshift' && team.format === competition.format
+          )
+        )
+        setImportCompetitionId(String(importDefault?.id ?? list[0].id))
         setScheduleCompetitionId(firstId)
+        setPrCompetitionId(firstId)
       }
+
+      const scopeProbe = await supabase
+        .from('league_matches')
+        .select('competition_id')
+        .limit(1)
+
+      setPrScopeAvailable(!scopeProbe.error)
     }
 
     loadCompetitions()
     loadScheduled()
     loadManageData()
+    loadRebuildHealth()
   }, [router])
 
   useEffect(() => {
@@ -762,60 +1048,6 @@ export default function Admin() {
   ])
 
   // ---------------------------------------------------------------------------
-  // Player matching
-  // ---------------------------------------------------------------------------
-
-  function normalizePlayerName(
-    value: string
-  ) {
-    return value
-      .trim()
-      .toLowerCase()
-  }
-
-  function findMatchingPlayer(
-    rawName: string,
-    roster: RosterPlayer[]
-  ): RosterPlayer | null {
-    const normalized =
-      normalizePlayerName(
-        rawName
-      )
-
-    const exact =
-      roster.find(
-        (player) =>
-          normalizePlayerName(
-            player.name
-          ) === normalized
-      )
-
-    if (exact) {
-      return exact
-    }
-
-    const aliasMatch =
-      roster.find(
-        (player) =>
-          (
-            player.aliases ??
-            []
-          ).some(
-            (alias) =>
-              normalizePlayerName(
-                alias
-              ) === normalized
-          )
-      )
-
-    if (aliasMatch) {
-      return aliasMatch
-    }
-
-    return null
-  }
-
-  // ---------------------------------------------------------------------------
   // Import helpers
   // ---------------------------------------------------------------------------
 
@@ -827,12 +1059,32 @@ export default function Admin() {
   }
 
   function clearImportPreview() {
+    setPlayersSummaryFile('')
+    setPlayersSummaryRows([])
+    setPlayersSummaryCoverage({ total: 0, basic: 0, movement: 0, positioning: 0, zeroBoost: 0 })
+    setPlayersSummaryErrors([])
+    setPlayersSummaryReady(false)
+    clearReplayPreview()
+  }
+
+  function clearReplayPreview() {
     setGames([])
     setPlayerStats([])
     setImportOpponent('')
     setImportDate('')
     setImportBestOf('')
-    setUnmatchedPlayers([])
+    setResolvedPlayers([])
+    setOpponentPlayers([])
+    setUnresolvedPlayers([])
+    setImportValidation({
+      errors: ['Upload the required Ballchasing players-games.csv source.'],
+      warnings: [],
+      expectedFrRows: 0,
+      resolvedFrRows: 0,
+      opponentRows: 0,
+      replayIds: 0,
+      coverage: { total: 0, basic: 0, movement: 0, positioning: 0, zeroBoost: 0 },
+    })
 
     resetExistingSeriesCheck()
   }
@@ -888,7 +1140,10 @@ export default function Admin() {
         Number(csv.saves) &&
 
       Number(existing.shots ?? 0) ===
-        Number(csv.shots)
+        Number(csv.shots) &&
+
+      Number(existing.score ?? 0) ===
+        Number(csv.score)
     )
   }
 
@@ -898,6 +1153,9 @@ export default function Admin() {
     existingStats: ExistingPlayerStat[],
     csvStats: PlayerStat[]
   ) {
+    if (game.ourGoals === null || game.theirGoals === null) return false
+    if (existingMatch.replay_id) return existingMatch.replay_id === game.replayId
+
     if (
       Number(existingMatch.flop_reset_score) !==
         Number(game.ourGoals) ||
@@ -969,17 +1227,30 @@ export default function Admin() {
         team,
       } = await getImportContext()
 
+      const replayIds = parsedGames.map((game) => game.replayId)
+      const { data: storedReplays, error: replayError } = await supabase
+        .from('matches')
+        .select('match_id, replay_id, series_id')
+        .in('replay_id', replayIds)
+
+      if (replayError) throw replayError
+      if (storedReplays?.length) {
+        setImportMode('conflict')
+        setExistingSeriesId(storedReplays[0].series_id ?? null)
+        setBackfillMappings([])
+        setExistingSeriesMessage(
+          `Duplicate replay detected. ${storedReplays.length} replay ID(s) are already stored; import is blocked.`
+        )
+        return
+      }
+
       const {
         data: candidates,
         error: seriesError,
       } = await supabase
         .from('series')
         .select(
-          'series_id, opponent_name, series_date'
-        )
-        .eq(
-          'competition_id',
-          competition.id
+          'series_id, competition_id, opponent_name, series_date, best_of'
         )
         .eq(
           'flop_reset_team_id',
@@ -1016,6 +1287,8 @@ export default function Admin() {
 
       const compatible: {
         seriesId: number
+        competitionId: number
+        bestOf: number | null
         mappings: MatchMapping[]
       }[] = []
 
@@ -1164,6 +1437,12 @@ export default function Admin() {
             seriesId:
               candidate.series_id,
 
+            competitionId:
+              candidate.competition_id,
+
+            bestOf:
+              candidate.best_of,
+
             mappings,
           })
         }
@@ -1182,6 +1461,16 @@ export default function Admin() {
         setBackfillMappings(
           match.mappings
         )
+
+        if (match.bestOf) setImportBestOf(String(match.bestOf))
+
+        if (Number(match.competitionId) !== Number(competition.id)) {
+          setImportMode('conflict')
+          setExistingSeriesMessage(
+            `Existing Series #${match.seriesId} was verified by date, team, opponent, game count, scores, and player box scores, but it is attached to Competition #${match.competitionId} instead of the selected ${competition.format} competition. Apply the audited competition-history repair before backfilling.`
+          )
+          return
+        }
 
         setImportMode(
           'backfill'
@@ -1240,7 +1529,8 @@ export default function Admin() {
       games.length > 0 &&
       playerStats.length > 0 &&
       importOpponent &&
-      importDate
+      importDate &&
+      importValidation.errors.length === 0
     ) {
       analyzeExistingSeries()
     }
@@ -1251,6 +1541,7 @@ export default function Admin() {
     importDate,
     importCompetitionId,
     importTeam,
+    importValidation.errors.length,
   ])
 
   // ---------------------------------------------------------------------------
@@ -1260,7 +1551,13 @@ export default function Admin() {
   function handlePlayersFile(
     file: File
   ) {
-    clearImportPreview()
+    setPlayersSummaryFile('')
+    setPlayersSummaryRows([])
+    setPlayersSummaryCoverage({ total: 0, basic: 0, movement: 0, positioning: 0, zeroBoost: 0 })
+    setPlayersSummaryErrors([])
+    setPlayersSummaryReady(false)
+
+    if (!games.length) clearReplayPreview()
 
     if (
       !importCompetitionId
@@ -1280,9 +1577,162 @@ export default function Admin() {
       return
     }
 
-    setImportMessage(
-      'Reading CSV...'
-    )
+    setImportMessage('Reading Ballchasing players.csv...')
+
+    Papa.parse(file, {
+      header: true,
+      delimiter: ';',
+      skipEmptyLines: true,
+      complete: (results: any) => {
+        const fields: string[] = results.meta?.fields ?? []
+        const detection = detectBallchasingFile(fields)
+        if (detection.type === 'players-games') {
+          const error = 'This appears to be players-games.csv. Upload it in the required canonical source field.'
+          setPlayersSummaryErrors([error])
+          setImportMessage(error)
+          return
+        }
+        if (detection.type !== 'players') {
+          const missing = detection.missingBasicHeaders.length
+            ? ` Missing: ${detection.missingBasicHeaders.join(', ')}.`
+            : ''
+          const error = `This is not a supported Ballchasing players.csv export.${missing}`
+          setPlayersSummaryErrors([error])
+          setImportMessage(error)
+          return
+        }
+
+        const summaryRows = (results.data as Record<string, unknown>[])
+          .map(mapPlayersCsvRow)
+          .filter((row) => row.playerName && row.teamName && row.games > 0)
+        if (!summaryRows.length) {
+          const error = 'No valid aggregate player rows were found in players.csv.'
+          setPlayersSummaryErrors([error])
+          setImportMessage(error)
+          return
+        }
+
+        const sides = new Map<string, PlayerSummaryRow[]>()
+        for (const row of summaryRows) {
+          const key = normalizeImportIdentity(row.teamName)
+          sides.set(key, [...(sides.get(key) ?? []), row])
+        }
+        const sideCandidates = [...sides.values()].map((rows) => ({
+          rows,
+          identities: rows.map((row) => resolveRosterIdentity(row.playerName, rosterPlayers)),
+        }))
+        const selectedKey = normalizeImportIdentity(importTeam)
+        let frSide = [...sides.entries()].find(([key]) => key === selectedKey)?.[1]
+        if (!frSide) {
+          const rosterSides = sideCandidates.filter((side) => side.identities.some(Boolean))
+          if (rosterSides.length === 1) frSide = rosterSides[0].rows
+        }
+
+        const errors: string[] = []
+        if (sides.size !== 2) errors.push(`Expected exactly two team sides in players.csv; found ${sides.size}.`)
+        if (!frSide) errors.push('Could not identify one unambiguous Flop Reset side in players.csv.')
+        const frRows = frSide ?? []
+        const frIdentities = frRows.map((row) => ({ row, identity: resolveRosterIdentity(row.playerName, rosterPlayers) }))
+        const unresolved = frIdentities.filter(({ identity }) => !identity).map(({ row }) => row.playerName)
+        if (unresolved.length) errors.push(`Unresolved Flop Reset players: ${unresolved.join(', ')}.`)
+
+        const selectedCompetition = competitions.find((competition) => String(competition.id) === importCompetitionId)
+        const expectedPerReplay = expectedPlayersForFormat(selectedCompetition?.format ?? '')
+        const rowGames = frRows.reduce((sum, row) => sum + row.games, 0)
+        const opponentRows = [...sides.values()].find((rows) => rows !== frSide) ?? []
+        const opponentRowGames = opponentRows.reduce((sum, row) => sum + row.games, 0)
+        if (!expectedPerReplay) errors.push('Unsupported or unknown competition format.')
+        if (expectedPerReplay && rowGames % expectedPerReplay !== 0) {
+          errors.push(`${rowGames} Flop Reset player-game samples cannot form complete ${selectedCompetition?.format} replays.`)
+        }
+        if (rowGames !== opponentRowGames) {
+          errors.push(`Team sample counts disagree: Flop Reset ${rowGames}, opponent ${opponentRowGames}.`)
+        }
+
+        const coverage = getPlayersCsvCoverage(frRows)
+        setPlayersSummaryFile(file.name)
+        setPlayersSummaryRows(frRows)
+        setPlayersSummaryCoverage(coverage)
+        const validatorErrors = [...errors]
+
+        if (games.length) {
+          if (rowGames !== playerStats.length) {
+            validatorErrors.push(`players.csv covers ${rowGames} Flop Reset player-game samples, but players-games.csv resolved ${playerStats.length}.`)
+          }
+          for (const { row, identity } of frIdentities) {
+            if (!identity) continue
+            const detailedRows = playerStats.filter((stat) => stat.playerId === identity.player.player_id)
+            const comparisons = [
+              ['games', row.games, detailedRows.length],
+              ['goals', row.basic.goals, detailedRows.reduce((sum, stat) => sum + stat.goals, 0)],
+              ['assists', row.basic.assists, detailedRows.reduce((sum, stat) => sum + stat.assists, 0)],
+              ['saves', row.basic.saves, detailedRows.reduce((sum, stat) => sum + stat.saves, 0)],
+              ['shots', row.basic.shots, detailedRows.reduce((sum, stat) => sum + stat.shots, 0)],
+              ['score', row.basic.score, detailedRows.reduce((sum, stat) => sum + stat.score, 0)],
+            ] as const
+            for (const [field, summaryValue, detailedValue] of comparisons) {
+              if (summaryValue !== null && Number(summaryValue) !== Number(detailedValue)) {
+                validatorErrors.push(`${identity.player.name}: players.csv ${field} (${summaryValue}) does not match players-games.csv (${detailedValue}).`)
+              }
+            }
+          }
+          setPlayersSummaryErrors(validatorErrors)
+          setPlayersSummaryReady(validatorErrors.length === 0)
+          if (validatorErrors.length) {
+            setImportMode('conflict')
+            setExistingSeriesMessage('Optional aggregate validation disagrees with the canonical source. Import is blocked.')
+          }
+          setImportMessage(validatorErrors.length
+            ? `Optional players.csv validator found ${validatorErrors.length} blocking mismatch(es).`
+            : `Optional players.csv validator agrees with all ${playerStats.length} canonical player-game rows.`)
+        } else {
+          setPlayersSummaryErrors(errors)
+          setPlayersSummaryReady(errors.length === 0)
+          setResolvedPlayers(frIdentities.flatMap(({ row, identity }) => identity ? [{
+            rawName: row.playerName,
+            canonicalName: identity.player.name,
+          }] : []))
+          setOpponentPlayers(opponentRows.map((row) => row.playerName))
+          setUnresolvedPlayers(unresolved)
+          setImportValidation({
+            errors: errors.length ? errors : ['Upload the required players-games.csv source to prove exact game destinations.'],
+            warnings: [
+              'players.csv is optional aggregate validation only; its averages are never copied into per-game rows.',
+              ...(!detection.movement ? ['Movement tracking is not included in this export.'] : []),
+              ...(!detection.positioning ? ['Positioning tracking is not included in this export.'] : []),
+              ...(!detection.zeroBoost ? ['Zero-boost tracking is not included in this export.'] : []),
+            ],
+            expectedFrRows: rowGames,
+            resolvedFrRows: rowGames,
+            opponentRows: opponentRowGames,
+            replayIds: 0,
+            coverage,
+          })
+          setImportMessage(errors.length
+            ? `players.csv detected, but ${errors.length} blocking validation error(s) remain.`
+            : `Optional players.csv validator detected. ${rowGames} Flop Reset player-game samples are covered; upload players-games.csv to validate the canonical write source.`)
+        }
+      },
+      error: (error) => setImportMessage(`CSV parse error: ${error.message}`),
+    })
+  }
+
+  function handlePlayerGamesFile(
+    file: File
+  ) {
+    clearReplayPreview()
+
+    if (!importCompetitionId) {
+      setImportMessage('Select a competition before uploading a CSV.')
+      return
+    }
+
+    if (rosterPlayers.length === 0) {
+      setImportMessage('No roster players were found for this team and format.')
+      return
+    }
+
+    setImportMessage('Reading canonical Ballchasing players-games.csv...')
 
     Papa.parse(file, {
       header: true,
@@ -1297,17 +1747,18 @@ export default function Admin() {
           results.meta
             ?.fields ?? []
 
-        if (
-          !fields.includes(
-            'replay id'
-          ) ||
-          !fields.includes(
-            'player name'
-          )
-        ) {
+        if (detectBallchasingFile(fields).type !== 'players-games') {
           setImportMessage(
-            'This does not appear to be a Ballchasing players-games CSV. Please upload the "...-players-games.csv" export.'
+            'Canonical source not detected. Choose a Ballchasing players-games.csv export here.'
           )
+          return
+        }
+
+        const normalizedFields = new Set(fields.map((field) => field.trim().toLocaleLowerCase('en-US')))
+        const requiredDetailHeaders = ['replay id', 'team name', 'player name', 'goals', 'assists', 'saves', 'shots', 'score']
+        const missingDetailHeaders = requiredDetailHeaders.filter((field) => !normalizedFields.has(field))
+        if (missingDetailHeaders.length) {
+          setImportMessage(`players-games.csv is missing required box-score headers: ${missingDetailHeaders.join(', ')}.`)
           return
         }
 
@@ -1376,11 +1827,24 @@ export default function Admin() {
         const parsedStats:
           PlayerStat[] = []
 
-        const unmatched =
-          new Set<string>()
+        const resolvedMappings = new Map<string, string>()
+        const opponentNames = new Set<string>()
+        const unresolvedNames = new Set<string>()
+        const validationErrors = new Set<string>()
+        const validationWarnings = new Set<string>()
+        let opponentRowCount = 0
 
         let detectedOpponent =
           ''
+
+        const selectedCompetition = competitions.find(
+          (competition) => String(competition.id) === importCompetitionId
+        )
+        const selectedFormat = selectedCompetition?.format ?? ''
+        const expectedPerReplay = expectedPlayersForFormat(selectedFormat)
+
+        if (!selectedCompetition) validationErrors.add('Unknown competition.')
+        if (!expectedPerReplay) validationErrors.add('Unsupported or unknown competition format.')
 
         Object.entries(
           byReplay
@@ -1389,32 +1853,51 @@ export default function Admin() {
             replayId,
             playersInGame,
           ]) => {
-            let ourGoals = 0
-            let theirGoals = 0
+            const sideResolution = identifyReplaySides({
+              selectedTeam: importTeam,
+              format: selectedFormat,
+              roster: rosterPlayers,
+              rows: playersInGame.map((row) => ({
+                rawName: textFrom(row, 'player name'),
+                teamName: textFrom(row, 'team name', 'team'),
+                goals: nullableNumberFrom(row, 'goals'),
+                source: row,
+              })),
+            })
 
-            playersInGame.forEach(
-              (row) => {
-                const rawName =
-                  textFrom(
-                    row,
-                    'player name'
-                  )
+            for (const error of sideResolution.errors) {
+              validationErrors.add(`${replayId.slice(0, 8)}: ${error}`)
+            }
+            for (const name of sideResolution.unresolvedFrNames) unresolvedNames.add(name)
+            for (const name of sideResolution.opponentPlayerNames) opponentNames.add(name)
+            opponentRowCount += sideResolution.opponentRows.length
+            for (const identity of sideResolution.resolved) {
+              resolvedMappings.set(identity.rawName, identity.player.name)
+            }
 
+            if (!detectedOpponent && sideResolution.opponentTeamName) {
+              detectedOpponent = sideResolution.opponentTeamName
+            } else if (
+              detectedOpponent &&
+              sideResolution.opponentTeamName &&
+              normalizeImportIdentity(detectedOpponent) !== normalizeImportIdentity(sideResolution.opponentTeamName)
+            ) {
+              validationErrors.add('Opponent team identity changes between replays.')
+            }
+
+            const ourGoals = sideResolution.ourGoals
+            const theirGoals = sideResolution.theirGoals
+
+            sideResolution.frRows.forEach(
+              ({ row: identityRow, identity }) => {
+                const row = identityRow.source as Record<string, any>
                 const player =
-                  findMatchingPlayer(
-                    rawName,
-                    rosterPlayers
-                  )
+                  identity?.player ?? null
 
                 const goals =
-                  numberFrom(
-                    row,
-                    'goals'
-                  )
+                  identityRow.goals ?? 0
 
                 if (player) {
-                  ourGoals += goals
-
                   const timeOnGround =
                     nullableNumberFrom(
                       row,
@@ -1662,24 +2145,6 @@ export default function Admin() {
 
                     zeroBoostPct,
                   })
-                } else {
-                  theirGoals +=
-                    goals
-
-                  unmatched.add(
-                    rawName
-                  )
-
-                  if (
-                    !detectedOpponent
-                  ) {
-                    detectedOpponent =
-                      textFrom(
-                        row,
-                        'team name'
-                      ) ||
-                      rawName
-                  }
                 }
               }
             )
@@ -1702,6 +2167,9 @@ export default function Admin() {
 
               ourGoals,
               theirGoals,
+              error: sideResolution.errors.length
+                ? 'Roster resolution incomplete'
+                : undefined,
             })
           }
         )
@@ -1714,11 +2182,88 @@ export default function Admin() {
           parsedStats
         )
 
-        setUnmatchedPlayers(
-          Array.from(
-            unmatched
+        const expectedFrRows = (expectedPerReplay ?? 0) * parsedGames.length
+        if (expectedFrRows !== parsedStats.length) {
+          validationErrors.add(
+            `Expected ${expectedFrRows} Flop Reset player-game rows; resolved ${parsedStats.length}.`
           )
-        )
+        }
+        if (new Set(parsedStats.map((stat) => stat.playerId)).size > (expectedPerReplay ?? 0)) {
+          validationWarnings.add('Roster substitution detected between replays.')
+        }
+        if (parsedStats.every((stat) => stat.percentageSupersonicSpeed === null)) {
+          validationWarnings.add('Advanced tracking is unavailable in this CSV.')
+        }
+        if (detectedOpponent) {
+          validationWarnings.add('Opponent identity is taken from the explicit CSV team grouping.')
+        }
+
+        for (const summaryRow of playersSummaryRows) {
+          const identity = resolveRosterIdentity(summaryRow.playerName, rosterPlayers)
+          if (!identity) continue
+          const detailedRows = parsedStats.filter((stat) => stat.playerId === identity.player.player_id)
+          const comparisons = [
+            ['games', summaryRow.games, detailedRows.length],
+            ['goals', summaryRow.basic.goals, detailedRows.reduce((sum, stat) => sum + stat.goals, 0)],
+            ['assists', summaryRow.basic.assists, detailedRows.reduce((sum, stat) => sum + stat.assists, 0)],
+            ['saves', summaryRow.basic.saves, detailedRows.reduce((sum, stat) => sum + stat.saves, 0)],
+            ['shots', summaryRow.basic.shots, detailedRows.reduce((sum, stat) => sum + stat.shots, 0)],
+            ['score', summaryRow.basic.score, detailedRows.reduce((sum, stat) => sum + stat.score, 0)],
+          ] as const
+          for (const [field, summaryValue, detailedValue] of comparisons) {
+            if (summaryValue !== null && Number(summaryValue) !== Number(detailedValue)) {
+              validationErrors.add(
+                `${identity.player.name}: players.csv ${field} (${summaryValue}) does not match players-games.csv (${detailedValue}).`,
+              )
+            }
+          }
+        }
+
+        const detailedCoverage: TrackingCoverage = {
+          total: parsedStats.length,
+          basic: parsedStats.length,
+          movement: parsedStats.filter((stat) =>
+            stat.percentageSupersonicSpeed !== null ||
+            stat.percentageOnGround !== null ||
+            stat.percentageLowAir !== null ||
+            stat.percentageHighAir !== null,
+          ).length,
+          positioning: parsedStats.filter((stat) =>
+            stat.percentageMostBack !== null ||
+            stat.percentageDefensiveHalf !== null ||
+            stat.percentageDefensiveThird !== null ||
+            stat.avgDistanceToBall !== null,
+          ).length,
+          zeroBoost: parsedStats.filter((stat) => stat.zeroBoostPct !== null).length,
+        }
+        if (playersSummaryReady && detailedCoverage.total !== playersSummaryCoverage.total) {
+          validationErrors.add(
+            `players.csv covers ${playersSummaryCoverage.total} Flop Reset player-game samples, but players-games.csv resolved ${detailedCoverage.total}.`,
+          )
+        }
+        validationWarnings.add('Confirm the scheduled odd best-of value manually; it is not inferred from games played.')
+
+        const errors = [...validationErrors]
+        setResolvedPlayers([...resolvedMappings.entries()].map(([rawName, canonicalName]) => ({
+          rawName,
+          canonicalName,
+        })))
+        setOpponentPlayers([...opponentNames])
+        setUnresolvedPlayers([...unresolvedNames])
+        setImportValidation({
+          errors,
+          warnings: [...validationWarnings],
+          expectedFrRows,
+          resolvedFrRows: parsedStats.length,
+          opponentRows: opponentRowCount,
+          replayIds: parsedGames.filter((game) => game.replayId).length,
+          coverage: detailedCoverage,
+        })
+
+        if (errors.length) {
+          setImportMode('conflict')
+          setExistingSeriesMessage('Roster or team-side validation failed. Import is blocked.')
+        }
 
         if (
           detectedOpponent
@@ -1738,8 +2283,12 @@ export default function Admin() {
           )
         }
 
+        setImportBestOf('')
+
         setImportMessage(
-          `Parsed ${parsedGames.length} game(s) and matched ${parsedStats.length} Flop Reset player-game rows.`
+          errors.length
+            ? `Parsed ${parsedGames.length} game(s), but validation found ${errors.length} blocking error(s).`
+            : `Canonical players-games.csv parsed: ${parsedGames.length} game(s) and ${parsedStats.length} resolved Flop Reset player-game rows.`
         )
       },
 
@@ -1758,7 +2307,8 @@ export default function Admin() {
   async function handleNewImport() {
     if (
       importMode !==
-      'new'
+      'new' ||
+      !safeToImport
     ) {
       setImportMessage(
         'This CSV is not currently cleared for a new-series import.'
@@ -1847,7 +2397,7 @@ export default function Admin() {
             importDate,
 
           notes:
-            `Imported via Ballchasing players-games CSV — ${importOpponent}`,
+            `Imported via canonical Ballchasing players-games.csv workflow — ${importOpponent}`,
         })
         .select()
         .single()
@@ -1976,6 +2526,7 @@ export default function Admin() {
           `Successfully imported ${games.length} new game(s) and ${playerStats.length} player-stat rows.`
         )
 
+        await loadRebuildHealth()
         clearImportPreview()
         loadManageData()
       } catch (error) {
@@ -2040,6 +2591,7 @@ export default function Admin() {
     if (
       importMode !==
         'backfill' ||
+      !safeToImport ||
       !existingSeriesId ||
       backfillMappings.length !==
         games.length
@@ -2278,9 +2830,7 @@ export default function Admin() {
             'match_player_stats'
           )
           .update(
-            processSkillUpdate(
-              item.stat
-            )
+            nonNullUpdate(processSkillUpdate(item.stat))
           )
           .eq(
             'stat_id',
@@ -2325,26 +2875,16 @@ export default function Admin() {
     try {
       const { competition, team } = await resolveCompetitionTeam(competitionId, teamName)
 
-      /*
-       * Forfeit result is still represented by 1-0 / 0-1
-       * until the dedicated forfeit-result migration is done.
-       */
       const finalFlopScore =
         isForfeit
-          ? forfeitResult ===
-            'win'
-            ? 1
-            : 0
+          ? 0
           : Number(
               flopScore
             )
 
       const finalOpponentScore =
         isForfeit
-          ? forfeitResult ===
-            'win'
-            ? 0
-            : 1
+          ? 0
           : Number(
               opponentScore
             )
@@ -2364,7 +2904,18 @@ export default function Admin() {
           opponent_name:
             opponentName,
 
-          best_of: 1,
+          best_of:
+            isForfeit
+              ? null
+              : 1,
+
+          is_forfeit:
+            isForfeit,
+
+          result_override:
+            isForfeit
+              ? forfeitResult
+              : null,
 
           series_date:
             matchDate,
@@ -2398,46 +2949,54 @@ export default function Admin() {
         )
       }
 
-      const {
-        error: matchError,
-      } = await supabase
-        .from('matches')
-        .insert({
-          competition_id:
-            competition.id,
+      if (!isForfeit) {
+        const {
+          error: matchError,
+        } = await supabase
+          .from('matches')
+          .insert({
+            competition_id:
+              competition.id,
 
-          flop_reset_team_id:
-            team.id,
+            flop_reset_team_id:
+              team.id,
 
-          series_id:
-            series.series_id,
+            series_id:
+              series.series_id,
 
-          opponent_name:
-            opponentName,
+            opponent_name:
+              opponentName,
 
-          flop_reset_score:
-            finalFlopScore,
+            flop_reset_score:
+              finalFlopScore,
 
-          opponent_score:
-            finalOpponentScore,
+            opponent_score:
+              finalOpponentScore,
 
-          is_forfeit:
-            isForfeit,
+            is_forfeit:
+              false,
 
-          match_date:
-            matchDate,
+            result_override:
+              null,
 
-          round:
-            matchRound ||
-            null,
-        })
+            match_date:
+              matchDate,
 
-      if (matchError) {
-        throw matchError
+            round:
+              matchRound ||
+              null,
+          })
+
+        if (matchError) {
+          await supabase.from('series').delete().eq('series_id', series.series_id)
+          throw matchError
+        }
       }
 
       setMessage(
-        'Match saved!'
+        isForfeit
+          ? 'Forfeit series saved with a 0–0 public score, zero game rows, and zero player rows.'
+          : 'Match saved!'
       )
 
       setOpponentName('')
@@ -2449,6 +3008,7 @@ export default function Admin() {
       setMatchRound('')
 
       loadManageData()
+      loadRebuildHealth()
     } catch (error: any) {
       setMessage(
         `Error: ${error.message}`
@@ -2559,17 +3119,53 @@ export default function Admin() {
   // Power Rankings
   // ---------------------------------------------------------------------------
 
-  function handlePrParse() {
+  async function handlePrParse() {
     try {
+      if (!prScopeAvailable) {
+        setPrMessage('Import blocked: apply and backfill the prepared competition-scoping migration before adding another ranking batch.')
+        return
+      }
+      const selected = competitions.find((competition) => String(competition.id) === prCompetitionId)
+      if (!selected || selected.format !== prFormat) {
+        setPrMessage(`Choose a ${prFormat} competition before parsing.`)
+        return
+      }
       const parsed =
         parseLeagueMatches(
           prText
         )
 
-      setPrPreview(parsed)
+      const { data: existing } = await supabase
+        .from('league_matches')
+        .select('round, tier, team_a, team_b, score_a, score_b, status')
+        .eq('competition_id', prCompetitionId)
+        .eq('format', prFormat)
+
+      const identity = (match: any) => [match.round, match.tier, match.team_a, match.team_b].join('|').toLowerCase()
+      const result = (match: any) => [match.score_a, match.score_b, match.status].join('|').toLowerCase()
+      const existingByIdentity = new Map((existing ?? []).map((match: any) => [identity(match), result(match)]))
+      let duplicates = 0
+      let conflicts = 0
+      const fresh = parsed.filter((match: any) => {
+        const prior = existingByIdentity.get(identity(match))
+        if (prior === undefined) return true
+        if (prior === result(match)) duplicates += 1
+        else conflicts += 1
+        return false
+      })
+
+      setPrPreview(fresh)
+      setPrAudit({
+        newMatches: fresh.length,
+        duplicates,
+        conflicts,
+        teams: new Set(parsed.flatMap((match: any) => [match.team_a, match.team_b]).filter(Boolean)).size,
+        forfeits: parsed.filter((match: any) => match.score_a === 'FFW' || match.score_a === 'FFL').length,
+        rounds: new Set(parsed.map((match: any) => match.round)).size,
+      })
 
       setPrMessage(
-        `Parsed ${parsed.length} matches.`
+        `Preview ready: ${fresh.length} new, ${duplicates} duplicates, ${conflicts} conflicts.`
       )
     } catch (
       error: any
@@ -2581,6 +3177,14 @@ export default function Admin() {
   }
 
   async function handlePrConfirm() {
+    if (!prScopeAvailable || !prCompetitionId) {
+      setPrMessage('Import blocked: competition ownership is required.')
+      return
+    }
+    if (prAudit.conflicts > 0) {
+      setPrMessage('Import blocked: resolve conflicting results before confirmation.')
+      return
+    }
     if (
       !prPreview.length
     ) {
@@ -2605,6 +3209,8 @@ export default function Admin() {
           ...match,
           format:
             prFormat,
+          competition_id:
+            Number(prCompetitionId),
           batch_label:
             label,
         })
@@ -2821,12 +3427,55 @@ export default function Admin() {
         : 'bg-neutral-950 text-neutral-500 hover:text-neutral-300'
     }`
 
+  const selectedImportCompetition = competitions.find(
+    (competition) => String(competition.id) === importCompetitionId
+  )
+  const selectedTeamFormats = new Set(
+    teamRegistrations
+      .filter((team) => team.name === importTeam)
+      .map((team) => team.format)
+  )
+  const compatibleImportCompetitions = competitions.filter(
+    (competition) => selectedTeamFormats.size === 0 || selectedTeamFormats.has(competition.format)
+  )
+  const compatibleImportTeams = [...new Set(
+    teamRegistrations
+      .filter((team) => team.format === selectedImportCompetition?.format)
+      .map((team) => team.name)
+  )]
+  const intendedBestOf = Number(importBestOf)
+  const bestOfValid = Number.isInteger(intendedBestOf) &&
+    intendedBestOf >= games.length && intendedBestOf > 0 && intendedBestOf % 2 === 1
+  const targetRegistration = teamRegistrations.find(
+    (team) => team.name === importTeam && team.format === selectedImportCompetition?.format
+  )
+  const previewErrors = games.length ? [
+    ...playersSummaryErrors,
+    ...importValidation.errors,
+    ...(!selectedImportCompetition ? ['Unknown competition.'] : []),
+    ...(!targetRegistration ? ['Selected team is not registered in the competition format.'] : []),
+    ...(!importOpponent.trim() ? ['Opponent identity is missing.'] : []),
+    ...(!importDate ? ['Series date is missing.'] : []),
+    ...(!bestOfValid ? ['A valid odd best-of value is required.'] : []),
+  ] : [...playersSummaryErrors, ...importValidation.errors]
+  const safeToImport = games.length > 0 && previewErrors.length === 0 &&
+    (importMode === 'new' || importMode === 'backfill')
+  const rebuildReady = !rebuildHealth.loading && !rebuildHealth.error &&
+    rebuildHealth.checks.competitionMismatches === 0 &&
+    rebuildHealth.checks.playerAliasesValid &&
+    rebuildHealth.checks.opponentAliasesValid &&
+    rebuildHealth.checks.structuralTablesValid &&
+    rebuildHealth.counts.duplicateReplayIds === 0
+  const advancedCoverage = rebuildHealth.counts.playerStats > 0
+    ? Math.round((rebuildHealth.counts.advancedRows / rebuildHealth.counts.playerStats) * 100)
+    : null
+
   // ---------------------------------------------------------------------------
   // UI
   // ---------------------------------------------------------------------------
 
   return (
-    <main className="px-4 md:px-8 py-12 max-w-3xl mx-auto">
+    <main className={`mx-auto w-full min-w-0 px-4 py-12 md:px-8 ${tab === 'playoffs' || tab === 'directory' ? 'max-w-7xl' : 'max-w-3xl'}`}>
       <h1 className="text-3xl font-bold mb-6">
         Admin
       </h1>
@@ -2855,6 +3504,16 @@ export default function Admin() {
         </button>
 
         <button
+          onClick={() => {
+            setTab('rebuild')
+            loadRebuildHealth()
+          }}
+          className={tabClass('rebuild')}
+        >
+          Data Health
+        </button>
+
+        <button
           onClick={() =>
             setTab('schedule')
           }
@@ -2877,6 +3536,20 @@ export default function Admin() {
         </button>
 
         <button
+          onClick={() => setTab('playoffs')}
+          className={tabClass('playoffs')}
+        >
+          Playoffs
+        </button>
+
+        <button
+          onClick={() => setTab('directory')}
+          className={tabClass('directory')}
+        >
+          League Directory
+        </button>
+
+        <button
           onClick={() =>
             setTab('manage')
           }
@@ -2884,9 +3557,65 @@ export default function Admin() {
             tabClass('manage')
           }
         >
-          Manage
+          Matches
         </button>
       </div>
+
+      {tab === 'rebuild' && (
+        <div className="space-y-6">
+          <section className={`rounded-2xl border p-6 ${rebuildReady ? 'border-emerald-800 bg-emerald-950/15' : 'border-red-900 bg-red-950/15'}`}>
+            <div className="text-xs font-black uppercase tracking-[.2em] text-neutral-500">Summer Rebuild Control Plane</div>
+            <div className={`mt-2 text-2xl font-black ${rebuildReady ? 'text-emerald-400' : 'text-red-400'}`}>
+              {rebuildHealth.loading ? 'CHECKING LIVE DATA…' : rebuildReady ? 'READY FOR CONTROLLED RESET' : 'NOT READY'}
+            </div>
+            <p className="mt-3 text-sm text-neutral-400">
+              The production reset remains a manual SQL operation. There is intentionally no destructive button on this page.
+            </p>
+            <button type="button" onClick={loadRebuildHealth} className="mt-4 rounded-lg border border-neutral-700 px-3 py-2 text-xs font-bold text-neutral-300 hover:border-purple-700">
+              Refresh live checks
+            </button>
+            {rebuildHealth.error && <p className="mt-3 text-xs text-red-300">{rebuildHealth.error}</p>}
+          </section>
+
+          <section className="rounded-2xl border border-neutral-800 bg-neutral-950/50 p-5">
+            <div className="text-xs font-black uppercase tracking-[.18em] text-purple-300">Pre-reset snapshot</div>
+            <div className="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {[
+                ['Imported Series', rebuildHealth.counts.series],
+                ['Played Games', rebuildHealth.counts.playedGames],
+                ['Player-Game Rows', rebuildHealth.counts.playerStats],
+                ['Forfeits', rebuildHealth.counts.forfeits],
+                ['Replay IDs', rebuildHealth.counts.replayIds],
+                ['League Rows', rebuildHealth.counts.leagueMatches],
+                ['Teams Represented', rebuildHealth.counts.teamsRepresented],
+                ['Advanced Coverage', advancedCoverage === null ? '—' : `${advancedCoverage}%`],
+              ].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-neutral-800 bg-black/20 p-3"><div className="text-xs text-neutral-500">{label}</div><div className="mt-1 text-xl font-black text-white">{value}</div></div>)}
+            </div>
+          </section>
+
+          <section className="grid gap-3 sm:grid-cols-2">
+            {[
+              ['Competition Integrity', rebuildHealth.checks.competitionMismatches === 0, `${rebuildHealth.checks.competitionMismatches} format mismatches`],
+              ['Player Identity', rebuildHealth.checks.playerAliasesValid, 'AkTION, Drollotov, HuskY.G2'],
+              ['Opponent Identity', rebuildHealth.checks.opponentAliasesValid, 'Ohio Midlads and SBC Blue Angels'],
+              ['Replay Integrity', rebuildHealth.counts.duplicateReplayIds === 0, `${rebuildHealth.counts.duplicateReplayIds} duplicate replay IDs`],
+              ['Player Row Integrity', rebuildHealth.counts.orphanPlayerRows === 0 && rebuildHealth.counts.wrongPlayerRowGames === 0, `${rebuildHealth.counts.orphanPlayerRows} orphan rows · ${rebuildHealth.counts.wrongPlayerRowGames} games with wrong FR row count`],
+              ['Series Coverage', rebuildHealth.counts.seriesWithoutGames === 0 && rebuildHealth.counts.playedGamesWithoutStats === 0, `${rebuildHealth.counts.seriesWithoutGames} unexplained empty series · ${rebuildHealth.counts.playedGamesWithoutStats} played games without stats`],
+              ['Forfeit Integrity', rebuildHealth.counts.forfeitGameRows === 0, rebuildHealth.counts.forfeitGameRows === 0 ? 'Zero game rows attached to forfeits' : `${rebuildHealth.counts.forfeitGameRows} legacy forfeit game rows queued for reset`],
+              ['Structural Identity', rebuildHealth.checks.structuralTablesValid, `${rebuildHealth.counts.competitions} competitions · ${rebuildHealth.counts.teams} teams · ${rebuildHealth.counts.players} players`],
+              ['Power Dataset', rebuildHealth.counts.leagueMatches === 0, rebuildHealth.counts.leagueMatches === 0 ? 'REBUILDING' : `${rebuildHealth.counts.leagueMatches} rows queued for reset`],
+            ].map(([label, healthy, detail]) => <div key={String(label)} className="rounded-xl border border-neutral-800 bg-neutral-950/50 p-4"><div className="flex items-center justify-between gap-3"><span className="font-bold text-white">{label}</span><span className={`text-xs font-black ${healthy ? 'text-emerald-400' : 'text-amber-300'}`}>{healthy ? '✓' : 'REVIEW'}</span></div><div className="mt-2 text-xs text-neutral-500">{detail}</div></div>)}
+          </section>
+
+          <section className="rounded-2xl border border-amber-800 bg-amber-950/15 p-5">
+            <div className="text-sm font-black text-amber-300">RESET SQL PREPARED</div>
+            <p className="mt-2 text-xs leading-5 text-amber-100/70">
+              supabase/manual/202608250009_clean_competitive_rebuild.sql creates an internal backup, audits the live foreign-key graph, detaches stale FR playoff links, clears competitive rows in explicit order, and verifies the result. It uses no TRUNCATE and no CASCADE command.
+            </p>
+          </section>
+          <LeagueDirectoryHealth />
+        </div>
+      )}
 
       {/* ADD RESULT */}
 
@@ -2938,15 +3667,9 @@ export default function Admin() {
               }
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
             >
-              <option value="Frameshift">
-                Frameshift
-              </option>
-              <option value="Frantic">
-                Frantic
-              </option>
-              <option value="Fracture">
-                Fracture
-              </option>
+              <option value="Frameshift">Frameshift</option>
+              <option value="Frantic">Frantic</option>
+              <option value="Fracture">Fracture</option>
             </select>
           </label>
 
@@ -2982,9 +3705,10 @@ export default function Admin() {
           </label>
 
           {isForfeit ? (
-            <label>
-              Result:
-              <select
+            <div className="rounded-xl border border-amber-900 bg-amber-950/15 p-4">
+              <label>
+                Result:
+                <select
                 value={
                   forfeitResult
                 }
@@ -3003,8 +3727,10 @@ export default function Admin() {
                 <option value="loss">
                   Loss (we forfeited)
                 </option>
-              </select>
-            </label>
+                </select>
+              </label>
+              <p className="mt-3 text-xs text-amber-100/70">Creates one official series result with a 0–0 public score, zero game rows, and zero player-stat rows. Do not upload a fake CSV.</p>
+            </div>
           ) : (
             <>
               <label>
@@ -3094,17 +3820,30 @@ export default function Admin() {
 
       {tab === 'import' && (
         <div>
+          <div className="mb-6 rounded-xl border border-purple-800 bg-purple-950/20 p-5">
+            <div className="text-xs font-black uppercase tracking-[.2em] text-purple-300">Summer Rebuild Mode</div>
+            <div className="mt-2 text-2xl font-black text-white">
+              {rebuildHealth.counts.series} verified source series imported
+            </div>
+            <p className="mt-2 text-sm text-neutral-400">
+              Source manifest total is not supplied. Every clean upload must reach <strong className="text-emerald-400">SAFE NEW IMPORT</strong> before confirmation.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-3 text-xs font-bold">
+              <Link href="/matches" className="text-purple-300 hover:underline">Match archive →</Link>
+              <Link href="/stats" className="text-purple-300 hover:underline">Stats →</Link>
+              <Link href="/records" className="text-purple-300 hover:underline">Records →</Link>
+              <Link href="/rivalries" className="text-purple-300 hover:underline">Rivalries →</Link>
+            </div>
+          </div>
           <div className="rounded-xl border border-neutral-800 bg-neutral-950/50 p-4 mb-6">
             <h2 className="font-semibold mb-1">
-              Ballchasing Import
+              Ballchasing Advanced Import
             </h2>
 
             <p className="text-sm text-neutral-500">
-              Upload the detailed{' '}
-              <strong>
-                players-games.csv
-              </strong>{' '}
-              export. Existing series are automatically detected and can be safely backfilled.
+              Upload <strong>players-games.csv</strong> as the required source of truth for
+              replay identity, box scores, and per-game tracking. A matching
+              <strong> players.csv</strong> may be attached only as an optional aggregate validator.
             </p>
           </div>
 
@@ -3122,7 +3861,7 @@ export default function Admin() {
               }}
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
             >
-              {competitions.map(
+              {compatibleImportCompetitions.map(
                 (competition) => (
                   <option
                     key={
@@ -3153,15 +3892,9 @@ export default function Admin() {
               }}
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
             >
-              <option value="Frameshift">
-                Frameshift
-              </option>
-              <option value="Frantic">
-                Frantic
-              </option>
-              <option value="Fracture">
-                Fracture
-              </option>
+              {compatibleImportTeams.map((team) => (
+                <option key={team} value={team}>{team}</option>
+              ))}
             </select>
           </label>
 
@@ -3177,24 +3910,53 @@ export default function Admin() {
               : 's'}
           </div>
 
-          <label className="block mb-6">
-            Players-Games CSV:
+          <label className="block mb-6 rounded-xl border border-purple-900 bg-purple-950/10 p-4">
+            <span className="font-black text-white">Required — Ballchasing players-games.csv</span>
             <input
               type="file"
               accept=".csv"
               onChange={(e) => {
-                const file =
-                  e.target.files?.[0]
-
-                if (file) {
-                  handlePlayersFile(
-                    file
-                  )
-                }
+                const file = e.target.files?.[0]
+                if (file) handlePlayerGamesFile(file)
               }}
               className="block mt-2"
             />
+            <span className="mt-2 block text-xs text-neutral-500">Canonical per-game write source. Supplies replay IDs and exact player-game destinations.</span>
           </label>
+
+          <label className="block mb-6">
+            Optional — matching Ballchasing players.csv validator:
+            <input
+              type="file"
+              accept=".csv"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) handlePlayersFile(file)
+              }}
+              className="block mt-2"
+            />
+            <span className="mt-2 block text-xs text-neutral-500">Aggregate cross-check only. It never writes averages into individual games.</span>
+          </label>
+
+          {(playersSummaryFile || playersSummaryErrors.length > 0) && (
+            <section className={`mb-6 rounded-xl border p-5 ${playersSummaryReady ? 'border-emerald-900 bg-emerald-950/15' : 'border-red-900 bg-red-950/20'}`}>
+              <div className="text-xs font-black uppercase tracking-[.18em] text-purple-300">File Detected</div>
+              <div className={`mt-2 font-black ${playersSummaryReady ? 'text-emerald-400' : 'text-red-400'}`}>
+                {playersSummaryReady ? 'Optional players.csv validator ✓' : 'Optional validator blocked'}
+              </div>
+              {playersSummaryFile && <div className="mt-1 break-all text-xs text-neutral-500">{playersSummaryFile}</div>}
+              <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                {[
+                  ['Basic', playersSummaryCoverage.basic],
+                  ['Movement', playersSummaryCoverage.movement],
+                  ['Positioning', playersSummaryCoverage.positioning],
+                  ['Zero Boost', playersSummaryCoverage.zeroBoost],
+                ].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-neutral-800 bg-black/20 p-3"><div className="text-xs text-neutral-500">{label}</div><div className="mt-1 font-black text-white">{value} / {playersSummaryCoverage.total}</div></div>)}
+              </div>
+              {playersSummaryErrors.length > 0 && <ul className="mt-4 list-disc space-y-1 pl-5 text-xs text-red-200">{playersSummaryErrors.map((error) => <li key={error}>{error}</li>)}</ul>}
+              {playersSummaryReady && <p className="mt-4 text-xs text-neutral-500">Aggregate coverage verified. Replay identity is intentionally unavailable in players.csv.</p>}
+            </section>
+          )}
 
           {importMessage && (
             <p className="text-neutral-300 mb-4">
@@ -3204,23 +3966,49 @@ export default function Admin() {
             </p>
           )}
 
-          {unmatchedPlayers.length >
-            0 && (
-            <div className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-4 mb-5">
-              <div className="font-semibold text-sm mb-2">
-                Opponent players detected
-              </div>
-
-              <div className="text-xs text-neutral-400">
-                {unmatchedPlayers.join(
-                  ', '
-                )}
-              </div>
-            </div>
-          )}
-
           {games.length > 0 && (
             <div>
+              <section className="mb-6 rounded-xl border border-neutral-800 bg-neutral-950/60 p-5">
+                <div className="text-xs font-black uppercase tracking-[.18em] text-purple-300">Import Target</div>
+                <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
+                  <div><dt className="text-neutral-500">Competition</dt><dd className="font-semibold text-white">{selectedImportCompetition ? formatCompetitionAdminLabel(selectedImportCompetition) : '—'}</dd></div>
+                  <div><dt className="text-neutral-500">Format</dt><dd className="font-semibold text-white">{selectedImportCompetition?.format ?? '—'}</dd></div>
+                  <div><dt className="text-neutral-500">Team</dt><dd className="font-semibold text-white">{importTeam}</dd></div>
+                  <div><dt className="text-neutral-500">Opponent</dt><dd className="font-semibold text-white">{importOpponent || '—'}</dd></div>
+                  <div><dt className="text-neutral-500">Date</dt><dd className="font-semibold text-white">{importDate ? formatPublicDate(importDate) : '—'}</dd></div>
+                  <div><dt className="text-neutral-500">Games / Best Of</dt><dd className="font-semibold text-white">{games.length} / {bestOfValid ? intendedBestOf : '—'}</dd></div>
+                  <div><dt className="text-neutral-500">Expected FR player rows</dt><dd className="font-semibold text-white">{importValidation.expectedFrRows}</dd></div>
+                  <div><dt className="text-neutral-500">Resolved FR player rows</dt><dd className="font-semibold text-white">{importValidation.resolvedFrRows}</dd></div>
+                  <div><dt className="text-neutral-500">Opponent player rows</dt><dd className="font-semibold text-white">{importValidation.opponentRows}</dd></div>
+                  <div><dt className="text-neutral-500">Replay IDs</dt><dd className="font-semibold text-white">{importValidation.replayIds} / {games.length}</dd></div>
+                  <div><dt className="text-neutral-500">Existing Series</dt><dd className="font-semibold text-white">{existingSeriesId ? `Series #${existingSeriesId}` : importMode === 'checking' ? 'Checking…' : 'None verified'}</dd></div>
+                  <div><dt className="text-neutral-500">Status</dt><dd className={`font-black ${safeToImport ? 'text-emerald-400' : 'text-red-400'}`}>{safeToImport ? importMode === 'backfill' ? 'SAFE BACKFILL' : 'SAFE NEW IMPORT' : importMode === 'checking' ? 'CHECKING' : 'IMPORT BLOCKED'}</dd></div>
+                </dl>
+              </section>
+
+              <section className="mb-6 rounded-xl border border-neutral-800 bg-neutral-950/60 p-5">
+                <div className="text-xs font-black uppercase tracking-[.18em] text-purple-300">Tracking Coverage</div>
+                <div className="mt-4 grid grid-cols-2 gap-3 text-sm sm:grid-cols-4">
+                  {[
+                    ['Basic', importValidation.coverage.basic],
+                    ['Movement', importValidation.coverage.movement],
+                    ['Positioning', importValidation.coverage.positioning],
+                    ['Zero Boost', importValidation.coverage.zeroBoost],
+                  ].map(([label, value]) => <div key={String(label)} className="rounded-lg border border-neutral-800 bg-black/20 p-3"><div className="text-xs text-neutral-500">{label}</div><div className="mt-1 font-black text-white">{value} / {importValidation.coverage.total}</div></div>)}
+                </div>
+              </section>
+
+              <section className="mb-6 grid gap-3 sm:grid-cols-3">
+                <div className="rounded-lg border border-emerald-900 bg-emerald-950/15 p-4"><div className="text-xs font-black uppercase text-emerald-400">Flop Reset Players Resolved</div><div className="mt-2 space-y-1 text-sm text-neutral-300">{resolvedPlayers.length ? resolvedPlayers.map((mapping) => <div key={`${mapping.rawName}-${mapping.canonicalName}`}>{mapping.rawName} → <span className="font-semibold text-white">{mapping.canonicalName}</span></div>) : <div>None</div>}</div></div>
+                <div className="rounded-lg border border-neutral-800 bg-neutral-950/50 p-4"><div className="text-xs font-black uppercase text-neutral-400">Opponent Players</div><div className="mt-2 text-sm text-neutral-300">{opponentPlayers.length ? opponentPlayers.join(', ') : 'None identified'}</div></div>
+                <div className={`rounded-lg border p-4 ${unresolvedPlayers.length ? 'border-red-900 bg-red-950/20' : 'border-neutral-800 bg-neutral-950/50'}`}><div className={`text-xs font-black uppercase ${unresolvedPlayers.length ? 'text-red-400' : 'text-neutral-400'}`}>Unresolved / Requires Review</div><div className="mt-2 text-sm text-neutral-300">{unresolvedPlayers.length ? unresolvedPlayers.join(', ') : 'None'}</div></div>
+              </section>
+
+              {(previewErrors.length > 0 || importValidation.warnings.length > 0) && <section className="mb-6 space-y-3">
+                {previewErrors.length > 0 && <div className="rounded-lg border border-red-900 bg-red-950/20 p-4"><div className="text-sm font-black text-red-400">Import blocked</div><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-red-200">{previewErrors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
+                {importValidation.warnings.length > 0 && <div className="rounded-lg border border-amber-900 bg-amber-950/15 p-4"><div className="text-sm font-black text-amber-300">Warnings</div><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-100">{importValidation.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}
+              </section>}
+
               <label className="block mb-4">
                 Opponent:
                 <input
@@ -3288,7 +4076,7 @@ export default function Admin() {
                     ? '✓ Existing Series Found'
                     : importMode ===
                       'conflict'
-                    ? '⚠ Import Conflict'
+                    ? existingSeriesId ? '⚠ Existing Series Requires Repair' : '⚠ Import Conflict'
                     : importMode ===
                       'checking'
                     ? 'Checking Existing Data...'
@@ -3301,9 +4089,7 @@ export default function Admin() {
                   }
                 </p>
 
-                {importMode ===
-                  'backfill' &&
-                  existingSeriesId && (
+                {existingSeriesId && (
                   <p className="text-xs text-neutral-500 mt-2">
                     Existing Series ID:{' '}
                     {
@@ -3322,38 +4108,31 @@ export default function Admin() {
 
               <div className="space-y-1 mb-6">
                 {games.map(
-                  (game) => (
+                  (game, index) => (
                     <div
                       key={
                         game.replayId
                       }
-                      className="text-sm text-neutral-300"
+                      className="rounded-lg border border-neutral-800 bg-black/20 p-3 text-sm text-neutral-300"
                     >
-                      {game.date} —{' '}
-                      {
-                        game.ourGoals
-                      }
-                      -
-                      {
-                        game.theirGoals
-                      }
-
-                      <span className="text-neutral-600 ml-2 text-xs">
-                        {
-                          game.replayId
-                        }
-                      </span>
+                      <div className="text-xs font-black uppercase tracking-wide text-purple-300">Game {index + 1}</div>
+                      <div className="mt-1">{game.date ? formatPublicDate(game.date) : 'Date unavailable'}</div>
+                      <div className="mt-1 font-semibold text-white">{game.ourGoals === null || game.theirGoals === null ? 'Score unavailable' : `${importTeam} ${game.ourGoals}–${game.theirGoals} ${importOpponent}`}</div>
+                      {game.error && <div className="mt-1 text-xs text-red-400">{game.error}</div>}
+                      <div className="mt-2 break-all text-xs text-neutral-600">Replay: {game.replayId}</div>
                     </div>
                   )
                 )}
               </div>
 
               <h2 className="text-xl font-semibold mb-2">
-                Player Stats (
-                {
-                  playerStats.length
-                } rows)
+                Player Resolution
               </h2>
+
+              <div className={`mb-4 rounded-lg border p-4 ${importValidation.resolvedFrRows === importValidation.expectedFrRows && importValidation.expectedFrRows > 0 ? 'border-emerald-900 bg-emerald-950/15' : 'border-red-900 bg-red-950/20'}`}>
+                <div className="grid grid-cols-2 gap-3 text-sm"><div><span className="text-neutral-500">Expected</span><div className="text-xl font-black text-white">{importValidation.expectedFrRows}</div></div><div><span className="text-neutral-500">Resolved</span><div className="text-xl font-black text-white">{importValidation.resolvedFrRows} / {importValidation.expectedFrRows}</div></div></div>
+                <div className={`mt-3 text-sm font-black ${safeToImport ? 'text-emerald-400' : 'text-red-400'}`}>{safeToImport ? '✓ RESOLUTION COMPLETE' : '✕ IMPORT BLOCKED'}</div>
+              </div>
 
               <div className="max-h-64 overflow-y-auto rounded-lg border border-neutral-800 mb-4">
                 {playerStats.map(
@@ -3399,7 +4178,8 @@ export default function Admin() {
                   onClick={
                     handleNewImport
                   }
-                  className="mt-2 bg-purple-700 hover:bg-purple-600 text-white px-4 py-2 rounded"
+                  disabled={!safeToImport}
+                  className="mt-2 rounded bg-purple-700 px-4 py-2 text-white enabled:hover:bg-purple-600 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
                 >
                   Confirm New Import
                 </button>
@@ -3411,7 +4191,8 @@ export default function Admin() {
                   onClick={
                     handleBackfillExistingSeries
                   }
-                  className="mt-2 bg-green-700 hover:bg-green-600 text-white px-4 py-2 rounded"
+                  disabled={!safeToImport}
+                  className="mt-2 rounded bg-green-700 px-4 py-2 text-white enabled:hover:bg-green-600 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
                 >
                   Backfill Existing Series
                 </button>
@@ -3658,6 +4439,12 @@ export default function Admin() {
 
       {tab === 'rankings' && (
         <div>
+          {!prScopeAvailable && (
+            <div className="mb-5 rounded-xl border border-amber-800 bg-amber-950/20 p-4 text-sm text-amber-200">
+              <div className="font-bold">Ranking imports are safely paused</div>
+              <p className="mt-1 text-amber-100/70">The live league_matches table has no competition_id yet. Apply and backfill the prepared migration before Fall or any new circuit is imported.</p>
+            </div>
+          )}
           <label className="block mb-4">
             Format:
             <select
@@ -3675,6 +4462,21 @@ export default function Admin() {
               <option value="2v2">
                 2v2
               </option>
+            </select>
+          </label>
+
+          <label className="block mb-4">
+            Competition / rating pool:
+            <select
+              value={prCompetitionId}
+              onChange={(e) => setPrCompetitionId(e.target.value)}
+              disabled={!prScopeAvailable}
+              className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 disabled:opacity-50"
+            >
+              <option value="">Select competition</option>
+              {competitions.filter((competition) => competition.format === prFormat).map((competition) => (
+                <option key={competition.id} value={competition.id}>{competition.name} · {competition.format}</option>
+              ))}
             </select>
           </label>
 
@@ -3710,6 +4512,14 @@ export default function Admin() {
           {prPreview.length >
             0 && (
             <div>
+              <div className="mb-4 grid grid-cols-2 gap-2 rounded-xl border border-neutral-800 bg-neutral-950 p-3 text-xs sm:grid-cols-3">
+                <span>New: <strong className="text-white">{prAudit.newMatches}</strong></span>
+                <span>Duplicates: <strong className="text-white">{prAudit.duplicates}</strong></span>
+                <span>Conflicts: <strong className={prAudit.conflicts ? 'text-red-400' : 'text-white'}>{prAudit.conflicts}</strong></span>
+                <span>Teams: <strong className="text-white">{prAudit.teams}</strong></span>
+                <span>Rounds: <strong className="text-white">{prAudit.rounds}</strong></span>
+                <span>Forfeits: <strong className="text-white">{prAudit.forfeits}</strong></span>
+              </div>
               <div className="max-h-64 overflow-y-auto text-xs text-neutral-400 space-y-1 mb-4">
                 {prPreview
                   .slice(0, 20)
@@ -3748,7 +4558,8 @@ export default function Admin() {
                 onClick={
                   handlePrConfirm
                 }
-                className="bg-purple-700 hover:bg-purple-600 text-white px-4 py-2 rounded"
+                disabled={prAudit.conflicts > 0 || !prScopeAvailable}
+                className="bg-purple-700 hover:bg-purple-600 text-white px-4 py-2 rounded disabled:cursor-not-allowed disabled:opacity-40"
               >
                 Confirm Import
               </button>
@@ -3756,6 +4567,11 @@ export default function Admin() {
           )}
         </div>
       )}
+
+      {/* PLAYOFFS */}
+
+      {tab === 'playoffs' && <PlayoffAdminEditor />}
+      {tab === 'directory' && <LeagueDirectoryAdmin />}
 
       {/* MANAGE */}
 

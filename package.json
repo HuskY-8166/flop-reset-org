@@ -8,7 +8,12 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit --incremental false --allowImportingTsExtensions",
-    "test:domain": "node --experimental-strip-types tests/results.test.ts"
+    "test:domain": "node --experimental-strip-types tests/results.test.ts",
+    "test:competition": "node --experimental-strip-types tests/competitions.test.ts",
+    "test:identity": "node --experimental-strip-types tests/opponents.test.ts",
+    "test:import": "node --experimental-strip-types tests/importValidation.test.ts && node --experimental-strip-types tests/ballchasingImport.test.ts",
+    "test:rebuild": "node --experimental-strip-types tests/rebuild.test.ts && node --experimental-strip-types tests/playoffAdmin.test.ts",
+    "test:directory": "node --experimental-strip-types tests/leagueDirectory.test.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.111.0",

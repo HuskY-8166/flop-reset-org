@@ -13,6 +13,7 @@ import {
   formatProcessSkillValue,
 } from '@/lib/processSkills'
 import { getGameOutcome } from '@/lib/results'
+import { competitionIdentity } from '@/lib/competitions'
 import { PlayerTrendChart } from '@/components/PlayerTrendChart'
 
 export const dynamic = 'force-dynamic'
@@ -973,6 +974,9 @@ export default async function PlayerProfile({
         teams (
           name,
           format
+        ),
+        competitions (
+          *
         )
       )
     `)
@@ -1507,14 +1511,46 @@ export default async function PlayerProfile({
       recentFive.length
     )
 
-  const trendPoints = chronological.slice(-12).map((stat: any) => ({
-    id: numberValue(stat.match_id),
-    date: String(stat.matches?.match_date ?? '').slice(0, 10),
-    opponent: stat.matches?.opponent_name ?? 'Unknown',
-    goals: numberValue(stat.goals),
-    assists: numberValue(stat.assists),
-    saves: numberValue(stat.saves),
-  }))
+  const trendChronological = [...allPlayerStats]
+    .filter((stat: any) => !stat.matches?.is_forfeit)
+    .sort((a: any, b: any) => {
+      const aTime = String(a.matches?.played_at ?? a.matches?.match_date ?? '')
+      const bTime = String(b.matches?.played_at ?? b.matches?.match_date ?? '')
+      const byTime = aTime.localeCompare(bTime)
+      if (byTime) return byTime
+      const bySeries = numberValue(a.matches?.series_id) - numberValue(b.matches?.series_id)
+      if (bySeries) return bySeries
+      const byGame = numberValue(a.matches?.game_number) - numberValue(b.matches?.game_number)
+      return byGame || numberValue(a.match_id) - numberValue(b.match_id)
+    })
+
+  const trendPoints = trendChronological.map((stat: any) => {
+    const competition = stat.matches?.competitions
+      ? competitionIdentity(stat.matches.competitions)
+      : null
+    const outcome = getGameOutcome(stat.matches ?? {})
+    const shots = numberValue(stat.shots)
+
+    return {
+      id: numberValue(stat.match_id),
+      seriesId: numberValue(stat.matches?.series_id),
+      gameNumber: hasValue(stat.matches?.game_number) ? numberValue(stat.matches.game_number) : null,
+      date: String(stat.matches?.played_at ?? stat.matches?.match_date ?? '').slice(0, 10),
+      opponent: stat.matches?.opponent_name ?? 'Unknown',
+      competition: competition ? `${competition.displayName} ${competition.year}` : 'Competition not recorded',
+      circuit: competition?.seasonLabel ?? 'Circuit not recorded',
+      format: stat.matches?.teams?.format ?? 'Format not recorded',
+      result: `${outcome.result} ${outcome.displayScore}`,
+      goals: numberValue(stat.goals),
+      assists: numberValue(stat.assists),
+      saves: numberValue(stat.saves),
+      shots,
+      score: numberValue(stat.score),
+      shootingPct: shots > 0 ? numberValue(stat.goals) / shots * 100 : null,
+      bpm: hasValue(stat.bpm) ? numberValue(stat.bpm) : null,
+      avgSpeed: hasValue(stat.avg_speed) ? numberValue(stat.avg_speed) : null,
+    }
+  })
 
   // ---------------------------------------------------------------------------
   // OPPONENT SPLITS

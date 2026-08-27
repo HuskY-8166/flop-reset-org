@@ -31,6 +31,19 @@ export function ResultBadge({ wins, losses }: { wins: number; losses: number }) 
   return <span className={`rounded-full px-3 py-1 text-sm font-black ${tied ? 'bg-neutral-800 text-neutral-300' : won ? 'bg-emerald-950 text-emerald-400' : 'bg-red-950 text-red-400'}`}>{tied ? 'T' : won ? 'W' : 'L'} {wins}–{losses}</span>
 }
 
+export function SeriesResultBadge({ result, wins, losses, isForfeit = false }: {
+  result: 'W' | 'L' | 'T'; wins: number; losses: number; isForfeit?: boolean
+}) {
+  const color = result === 'W'
+    ? 'bg-emerald-950 text-emerald-400'
+    : result === 'L'
+      ? 'bg-red-950 text-red-400'
+      : 'bg-neutral-800 text-neutral-300'
+  return <span className={`rounded-full px-3 py-1 text-sm font-black ${color}`}>
+    {isForfeit ? `${result} · FORFEIT` : `${result} ${wins}–${losses}`}
+  </span>
+}
+
 export function FormIndicator({ results }: { results: { id: string | number; won: boolean; href?: string }[] }) {
   return <div className="flex flex-wrap gap-2" aria-label="Recent form">{results.map((result) => {
     const chip = <span className={`flex h-9 w-9 items-center justify-center rounded-lg border text-sm font-black ${result.won ? 'border-emerald-900 bg-emerald-950 text-emerald-400' : 'border-red-900 bg-red-950 text-red-400'}`}>{result.won ? 'W' : 'L'}</span>

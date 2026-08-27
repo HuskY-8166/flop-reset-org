@@ -1,202 +1,86 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
+import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
-import { calculateEloWithHistory } from '@/lib/elo'
+import { competitionIdentity } from '@/lib/competitions'
+import { calculateEloWithHistory, RATING_MODEL_VERSION, type LeagueMatch } from '@/lib/elo'
+import { PowerHistoryChart } from '@/components/PowerHistoryChart'
+import { PowerRankingsTable } from '@/components/PowerRankingsTable'
+
 export const dynamic = 'force-dynamic'
-
 const FLOP_TEAMS = ['Flop Reset Frameshift', 'Flop Reset - Frantic', 'Flop Reset | Fracture']
-const FLOP_TEAM_SLUGS: Record<string, string> = {
-  'Flop Reset Frameshift': 'Frameshift',
-  'Flop Reset - Frantic': 'Frantic',
-  'Flop Reset | Fracture': 'Fracture',
-}
 
-export default async function PowerRankings({ searchParams }: { searchParams: Promise<{ format?: string }> }) {
-  const { format } = await searchParams
-  const activeFormat = format === '2v2' ? '2v2' : '3v3'
+function signed(value: number) { return `${value >= 0 ? '+' : ''}${value.toFixed(1)}` }
+function formLabel(value: number) { return value >= 15 ? 'Rising' : value <= -15 ? 'Falling' : 'Stable' }
 
-  const { data: matches, error } = await supabase
-    .from('league_matches')
-    .select('round, tier, team_a, team_b, score_a, score_b, status, match_date')
-    .eq('format', activeFormat)
+export default async function PowerRankings({ searchParams }: { searchParams: Promise<{ competition?: string; format?: string; round?: string }> }) {
+  const filters = await searchParams
+  const { data: competitions = [] } = await supabase.from('competitions').select('*').order('start_date', { ascending: false })
+  const activeFormat = filters.format === '2v2' ? '2v2' : '3v3'
+  const compatible = (competitions ?? []).filter((competition: any) => competition.format === activeFormat)
+  const requestedCompetition = compatible.find((competition: any) => String(competition.id) === filters.competition)
+  const selectedCompetition = requestedCompetition ?? compatible.find((competition: any) => competition.status === 'active') ?? compatible[0] ?? null
 
-  const { teamSummaries, rounds } = matches
-    ? calculateEloWithHistory(matches as any)
-    : { teamSummaries: [], rounds: [] }
-
-  const latestRound = rounds[rounds.length - 1]
-  const flopSummaries = teamSummaries.filter((t) => FLOP_TEAMS.includes(t.team))
-  const others = teamSummaries.filter((t) => !FLOP_TEAMS.includes(t.team) && t.overallRank !== null)
-
-  const biggestRiser = [...others].sort((a, b) => b.rankMove - a.rankMove)[0]
-  const biggestFaller = [...others].sort((a, b) => a.rankMove - b.rankMove)[0]
-  const eloSurge = [...teamSummaries].sort((a, b) => b.lastRoundDelta - a.lastRoundDelta)[0]
-  const teamOfRound = [...teamSummaries].sort((a, b) => b.teamOfRoundScore - a.teamOfRoundScore)[0]
-  const giantKiller = [...teamSummaries].filter((team) => team.giantKillerScore > 0).sort((a, b) => b.giantKillerScore - a.giantKillerScore)[0]
-
-  const rankedTeams = teamSummaries.filter((t) => t.overallRank !== null)
-  const byTier: Record<string, typeof rankedTeams> = {}
-  rankedTeams.forEach((r) => {
-    byTier[r.tier] = byTier[r.tier] || []
-    byTier[r.tier].push(r)
-  })
-  const tierOrder = Object.keys(byTier).sort()
-
-  function moveArrow(move: number) {
-    if (move > 0) return <span className="text-emerald-400">▲{move}</span>
-    if (move < 0) return <span className="text-red-400">▼{Math.abs(move)}</span>
-    return <span className="text-neutral-500">—</span>
+  const scopeProbe = await supabase.from('league_matches').select('competition_id').limit(1)
+  const competitionScoped = !scopeProbe.error
+  let matchResult: { data: any[] | null; error: { message: string } | null }
+  if (competitionScoped) {
+    let query: any = supabase.from('league_matches').select('id, competition_id, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label').eq('format', activeFormat)
+    if (selectedCompetition) query = query.eq('competition_id', selectedCompetition.id)
+    matchResult = await query
+  } else {
+    matchResult = await supabase.from('league_matches').select('id, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label').eq('format', activeFormat) as any
   }
+  const { data: rawMatches, error } = matchResult
+  const allMatches = (rawMatches ?? []) as LeagueMatch[]
+  const fullEngine = calculateEloWithHistory(allMatches)
+  const requestedRound = Number.parseInt(filters.round ?? '', 10)
+  const asOfRound = Number.isFinite(requestedRound) && fullEngine.rounds.includes(requestedRound) ? requestedRound : null
+  const engine = asOfRound === null ? fullEngine : calculateEloWithHistory(allMatches.filter((match) => (Number.parseInt(match.round.replace(/\D/g, ''), 10) || 0) <= asOfRound))
+  const { teamSummaries, teamRoundHistory } = engine
+  const identity = selectedCompetition ? competitionIdentity(selectedCompetition) : null
+  const queryString = new URLSearchParams({ format: activeFormat, ...(selectedCompetition ? { competition: String(selectedCompetition.id) } : {}), ...(asOfRound !== null ? { round: String(asOfRound) } : {}) }).toString()
 
-  return (
-    <main className="px-4 py-10 md:px-8 md:py-14 max-w-7xl mx-auto">
-      <div className="rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9 mb-8">
-        <div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">Competitive form</div>
-        <h1 className="text-4xl md:text-6xl font-black tracking-tight mt-2">Power <span style={{ color: '#AF69EE' }}>Rankings</span></h1>
-        <p className="text-neutral-400 mt-2 max-w-3xl">Elo-based team strength from completed league results. Ratings update after each tracked result, remain separated by format, and apply half-weight movement to forfeits.</p>
-        <div className="mt-5 rounded-2xl border border-amber-800/70 bg-amber-950/20 p-4 text-sm text-amber-100">
-          <div className="font-black uppercase tracking-[.16em]">Legacy ranking scope</div>
-          <p className="mt-1 text-amber-100/80">These imported rankings are format-scoped but are not yet linked to a circuit. Treat this as the Summer Circuit 2026 archive only. A prepared database upgrade adds circuit ownership before Fall Circuit imports begin, so Summer and Fall ratings cannot be mixed.</p>
-        </div>
-        <div className="mt-4 text-sm text-neutral-500">Latest completed round: <span className="font-semibold text-white">{latestRound ?? 'Not available'}</span></div>
-      </div>
+  const flopSummaries = teamSummaries.filter((team) => FLOP_TEAMS.includes(team.team))
+  const rankedTeams = teamSummaries.filter((team) => team.overallRank !== null)
+  const biggestRankRiser = [...rankedTeams].sort((a, b) => b.rankMove - a.rankMove)[0]
+  const biggestEloGainer = [...rankedTeams].sort((a, b) => b.lastRoundDelta - a.lastRoundDelta)[0]
+  const teamOfRound = [...rankedTeams].sort((a, b) => b.teamOfRoundScore - a.teamOfRoundScore)[0]
+  const giantKiller = [...rankedTeams].filter((team) => team.giantKillerUpsets > 0).sort((a, b) => b.giantKillerScore - a.giantKillerScore)[0]
+  const singleUpset = [...rankedTeams].filter((team) => team.giantKillerUpsets > 0).sort((a, b) => b.giantKillerLargestGap - a.giantKillerLargestGap)[0]
 
-      <div className="flex gap-2 mb-10">
-        <a href="?format=3v3" className={`rounded-full px-4 py-2 text-sm font-semibold no-underline ${activeFormat === '3v3' ? 'bg-purple-700 text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>3v3</a>
-        <a href="?format=2v2" className={`rounded-full px-4 py-2 text-sm font-semibold no-underline ${activeFormat === '2v2' ? 'bg-purple-700 text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>2v2</a>
-      </div>
+  return <main className="mx-auto w-full min-w-0 max-w-7xl px-4 py-10 md:px-8 md:py-14">
+    <header className="min-w-0 rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9">
+      <div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">Canonical competitive strength</div>
+      <h1 className="mt-2 text-4xl font-black tracking-tight md:text-6xl">Power <span className="text-purple-400">Rankings</span></h1>
+      <p className="mt-3 max-w-3xl text-neutral-400">One rating engine for rankings, historical strength, opponent intelligence, playoff context, and future FR Markets snapshots.</p>
+      <div className="mt-5 flex flex-wrap gap-2 text-xs text-neutral-500"><span>{identity ? `${identity.league} · ${identity.seasonLabel}` : 'Legacy imported league pool'}</span><span>•</span><span>{activeFormat}</span><span>•</span><span>{asOfRound === null ? 'Current' : `As of Round ${asOfRound}`}</span><span>•</span><span>Model {RATING_MODEL_VERSION}</span></div>
+    </header>
 
-      {error && <p>Error: {error.message}</p>}
-      {teamSummaries.length === 0 && <p className="text-neutral-500">No match data imported for this format yet.</p>}
+    {!competitionScoped && <div className="mt-5 rounded-2xl border border-amber-800/70 bg-amber-950/20 p-4 text-sm text-amber-100"><div className="font-black uppercase tracking-[.16em]">Summer Circuit archive</div><p className="mt-1 text-amber-100/80">These historical rankings currently cover Summer Circuit 2026 only. A new circuit will remain separate until its results have been independently verified.</p></div>}
 
-      {flopSummaries.length > 0 && (
-        <>
-          <h2 className="text-2xl font-bold mb-4">Flop Reset Spotlight</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12">
-            {flopSummaries.map((t) => (
-              <div key={t.team} className="rounded-xl bg-purple-950/40 border border-purple-800 p-5">
-                <a href={`/teams/${encodeURIComponent(FLOP_TEAM_SLUGS[t.team])}`} className="font-bold text-lg mb-3 inline-block text-white hover:underline">{t.team}</a>
-                <div className="grid grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <div className="text-neutral-400">Overall Rank</div>
-                    <div className="text-xl font-bold">#{t.overallRank} {moveArrow(t.rankMove)}</div>
-                  </div>
-                  <div>
-                    <div className="text-neutral-400">Elo Rating</div>
-                    <div className="text-xl font-bold">{Math.round(t.rating)}</div>
-                    <div className={t.lastRoundDelta >= 0 ? 'text-emerald-400 text-xs' : 'text-red-400 text-xs'}>
-                      {t.lastRoundDelta >= 0 ? '+' : ''}{t.lastRoundDelta.toFixed(1)} this round
-                    </div>
-                  </div>
-                  <div>
-                    <div className="text-neutral-400">Tier</div>
-                    <div className="font-bold">{t.tier} · rank #{t.tierRank}</div>
-                  </div>
-                  <div>
-                    <div className="text-neutral-400">Peak / Worst</div>
-                    <div className="font-bold">{Math.round(t.peak)} / {Math.round(t.worst)}</div>
-                  </div>
-                  <div>
-                    <div className="text-neutral-400">Matches Tracked</div>
-                    <div className="font-bold">{t.matchesTracked}</div>
-                  </div>
-                  <div>
-                    <div className="text-neutral-400">Best / Worst Match</div>
-                    <div className="font-bold">+{t.bestMatch.toFixed(0)} / {t.worstMatch.toFixed(0)}</div>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
+    <form className="mt-6 grid min-w-0 gap-3 rounded-2xl border border-neutral-800 bg-[#111] p-4 sm:grid-cols-3 lg:grid-cols-4">
+      <FilterSelect label="Format" name="format" defaultValue={activeFormat}><option value="3v3">3v3</option><option value="2v2">2v2</option></FilterSelect>
+      <label className="min-w-0 text-xs font-bold uppercase tracking-wide text-neutral-500">Competition<select name="competition" defaultValue={selectedCompetition?.id ?? ''} disabled={!competitionScoped} className="mt-1 block min-h-11 w-full min-w-0 rounded-lg border border-neutral-700 bg-[#181818] px-3 text-sm text-white disabled:opacity-50">{compatible.map((competition: any) => { const item = competitionIdentity(competition); return <option key={competition.id} value={competition.id}>{item.league} · {item.seasonLabel}</option> })}</select></label>
+      <FilterSelect label="Rankings as of" name="round" defaultValue={asOfRound ?? ''}><option value="">Current</option>{fullEngine.rounds.map((round) => <option key={round} value={round}>After Round {round}</option>)}</FilterSelect>
+      <button className="min-h-11 self-end rounded-lg bg-purple-700 px-4 text-sm font-black text-white">View rating pool</button>
+    </form>
 
-      <h2 className="text-2xl font-bold mb-4">Biggest Movers</h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12">
-        {biggestRiser && (
-          <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-4">
-            <div className="text-sm text-neutral-400">🔥 Biggest Riser</div>
-            <div className="font-bold">{biggestRiser.team}</div>
-            <div className="text-emerald-400">▲{biggestRiser.rankMove} positions</div>
-          </div>
-        )}
-        {biggestFaller && (
-          <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-4">
-            <div className="text-sm text-neutral-400">📉 Biggest Faller</div>
-            <div className="font-bold">{biggestFaller.team}</div>
-            <div className="text-red-400">▼{Math.abs(biggestFaller.rankMove)} positions</div>
-          </div>
-        )}
-        {eloSurge && (
-          <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-4">
-            <div className="text-sm text-neutral-400">⚡ Elo Surge</div>
-            <div className="font-bold">{eloSurge.team}</div>
-            <div className="text-emerald-400">+{eloSurge.lastRoundDelta.toFixed(0)} Elo</div>
-          </div>
-        )}
-      </div>
+    {error && <p className="mt-6 rounded-xl border border-red-900 bg-red-950/20 p-4 text-red-300">Something went wrong while loading the ratings. Please try again shortly.</p>}
+    {!error && !rankedTeams.length && <div className="mt-8 rounded-2xl border border-neutral-800 bg-[#111] p-6"><div className="font-black text-white">Power Rankings are awaiting the rebuilt league results.</div><p className="mt-2 text-sm text-neutral-500">Ratings will return after verified league results are reimported chronologically.</p></div>}
 
-      <h2 className="text-2xl font-bold mb-4">Round Awards</h2>
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12">
-        {teamOfRound && (
-          <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-4">
-            <div className="text-sm text-neutral-400">🏆 Team of the Round</div>
-            <div className="font-bold">{teamOfRound.team}</div>
-          </div>
-        )}
-        {giantKiller && (
-          <div className="rounded-xl bg-neutral-900 border border-neutral-800 p-4">
-            <div className="text-sm text-neutral-400">🐉 Giant Killer · season to date</div>
-            <div className="font-bold">{giantKiller.team}</div>
-            <div className="text-neutral-400 text-sm">{giantKiller.giantKillerScore.toFixed(0)} cumulative pre-match Elo gap defeated</div>
-          </div>
-        )}
-      </div>
+    {!!flopSummaries.length && <section className="mt-12"><Eyebrow>Home-club watch</Eyebrow><h2 className="mt-1 text-3xl font-black">Flop Reset Spotlight</h2><div className="mt-5 grid gap-4 md:grid-cols-3">{flopSummaries.map((team) => <Link key={team.team} href={`/power-rankings/team/${encodeURIComponent(team.team)}?${queryString}`} className="rounded-2xl border border-purple-800 bg-purple-950/20 p-5 no-underline transition hover:border-purple-500"><div className="text-lg font-black text-white">{team.team}</div><div className="mt-4 grid grid-cols-2 gap-4 text-sm"><Metric label="Rating" value={Math.round(team.rating)} /><Metric label="Overall" value={`#${team.overallRank}`} /><Metric label="Last Round" value={signed(team.lastRoundDelta)} /><Metric label="Last 3" value={signed(team.threeRoundDelta)} /><Metric label="SOS" value={team.sosFull ? `#${team.sosRank} / ${team.sosTierSize}` : '—'} /><Metric label="Sample" value={team.confidence} /></div><div className="mt-4 flex gap-1" aria-label={`Recent form ${team.recentForm.join(' ')}`}>{team.recentForm.map((result, index) => <span key={index} className={`rounded px-2 py-1 text-xs font-black ${result === 'W' ? 'bg-emerald-950 text-emerald-400' : 'bg-red-950 text-red-400'}`}>{result}</span>)}</div></Link>)}</div></section>}
 
-      <h2 className="text-2xl font-bold mb-4">Full Tier Rankings</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {tierOrder.map((tier) => (
-          <div key={tier} className="rounded-xl bg-neutral-900 border border-neutral-800 p-4">
-            <h3 className="font-bold mb-3 border-b border-neutral-800 pb-2">{tier}</h3>
-            <div className="space-y-1">
-              {byTier[tier]
-                .sort((a, b) => b.rating - a.rating)
-                .map((r, i) => {
-                  const isUs = FLOP_TEAMS.includes(r.team)
-                  return (
-                    <div
-                      key={r.team}
-                      className={`flex justify-between items-center px-2 py-1 rounded text-sm ${isUs ? 'bg-purple-950 border border-purple-700' : ''}`}
-                    >
-                      <span className={isUs ? 'font-bold text-purple-300' : 'text-neutral-300'}>
-                        {i + 1}. {isUs ? (
-                          <a href={`/teams/${encodeURIComponent(FLOP_TEAM_SLUGS[r.team])}`} className="hover:underline">
-                            {r.team}
-                          </a>
-                        ) : r.team}
-                      </span>
-                      <span className="flex items-center gap-2">
-                        <span className="font-mono text-neutral-500">{Math.round(r.rating)}</span>
-                        <span className="text-xs">{moveArrow(r.rankMove)}</span>
-                      </span>
-                    </div>
-                  )
-                })}
-            </div>
-          </div>
-        ))}
-      </div>
+    {!!rankedTeams.length && <><section className="mt-12"><Eyebrow>This round</Eyebrow><h2 className="mt-1 text-3xl font-black">What Changed?</h2><div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4"><Award label="Biggest Rank Riser" team={biggestRankRiser} detail={biggestRankRiser ? `${biggestRankRiser.rankMove >= 0 ? '+' : ''}${biggestRankRiser.rankMove} places` : '—'} /><Award label="Biggest Elo Gainer" team={biggestEloGainer} detail={biggestEloGainer ? `${signed(biggestEloGainer.lastRoundDelta)} Elo` : '—'} /><Award label="Team of the Round" team={teamOfRound} detail="Elo gain + rank movement + result surprise" /><Award label="Biggest Single Upset" team={singleUpset} detail={singleUpset ? `+${singleUpset.giantKillerLargestGap.toFixed(0)} pre-match Elo gap` : 'No qualifying upset'} /></div></section>
+      {giantKiller && <section className="mt-8 rounded-2xl border border-neutral-800 bg-[#111] p-5"><Eyebrow>Season Giant Killer</Eyebrow><div className="mt-2 text-2xl font-black">{giantKiller.team}</div><div className="mt-3 flex flex-wrap gap-5 text-sm text-neutral-400"><span><strong className="text-white">{giantKiller.giantKillerUpsets}</strong> upsets</span><span>Largest gap <strong className="text-white">{giantKiller.giantKillerLargestGap.toFixed(0)}</strong></span><span>Cumulative gap <strong className="text-white">{giantKiller.giantKillerScore.toFixed(0)}</strong></span></div></section>}
+      <PowerHistoryChart history={teamRoundHistory} teams={rankedTeams.map((team) => team.team)} />
+      <PowerRankingsTable rows={rankedTeams} queryString={queryString} />
+    </>}
 
-      <details className="mt-12 rounded-2xl border border-neutral-800 bg-[#111111] p-5">
-        <summary className="cursor-pointer font-bold text-white">How the rating works</summary>
-        <div className="mt-4 grid gap-4 text-sm text-neutral-400 md:grid-cols-2">
-          <p><strong className="text-white">What raises a rating:</strong> beating a higher-rated opponent and winning by more than the typical margin for that tier and round.</p>
-          <p><strong className="text-white">What lowers a rating:</strong> losing—especially to a lower-rated opponent. Early matches move ratings faster through a larger K-factor.</p>
-          <p><strong className="text-white">Starting point:</strong> teams begin from a tier-based seed. Rankings therefore combine tier context with completed results.</p>
-          <p><strong className="text-white">Round movement:</strong> the displayed round delta is the sum of every rating change a team records in that round, not merely its final match.</p>
-          <p><strong className="text-white">Giant Killer:</strong> season-to-date credit sums the pre-match rating gap only when a lower-rated team beats a higher-rated opponent. Forfeits do not qualify.</p>
-          <p><strong className="text-white">Data rules:</strong> 2v2 and 3v3 are calculated separately. Incomplete fixtures are excluded; forfeits use half the normal K-factor and no score-margin multiplier.</p>
-        </div>
-      </details>
-    </main>
-  )
+    <details className="mt-12 rounded-2xl border border-neutral-800 bg-[#111] p-5"><summary className="cursor-pointer font-black text-white">How the rating works</summary><div className="mt-4 grid gap-4 text-sm text-neutral-400 md:grid-cols-2"><p><strong className="text-white">Rating pools:</strong> a competition/circuit and format form one independent pool. Raw Elo from separately seeded pools is not directly comparable.</p><p><strong className="text-white">Tier seed:</strong> a team starts at its tier seed. Early results move faster through a higher K-factor.</p><p><strong className="text-white">Expected result:</strong> opponent pre-match Elo sets the expected win chance. Upsets therefore move ratings more.</p><p><strong className="text-white">Margin:</strong> non-forfeit score margin is compared with the normal margin for that tier and round, with a capped multiplier.</p><p><strong className="text-white">Forfeits:</strong> the existing rule is preserved: half K-factor and no margin multiplier. They count officially but never qualify for performance awards. Zero movement remains recommended for future review.</p><p><strong className="text-white">Schedule strength:</strong> average opponent Elo before each played match; recent SOS uses the latest five performance results.</p><p><strong className="text-white">Adjusted form:</strong> average actual result minus expected result. Positive means the team exceeded model expectation.</p><p><strong className="text-white">Limits:</strong> ratings represent tracked league results only. {engine.duplicateCount} duplicate row{engine.duplicateCount === 1 ? '' : 's'} excluded in this view.</p></div></details>
+  </main>
 }
+
+function FilterSelect({ label, children, ...props }: React.SelectHTMLAttributes<HTMLSelectElement> & { label: string }) { return <label className="min-w-0 text-xs font-bold uppercase tracking-wide text-neutral-500">{label}<select {...props} className="mt-1 block min-h-11 w-full min-w-0 rounded-lg border border-neutral-700 bg-[#181818] px-3 text-sm text-white">{children}</select></label> }
+function Eyebrow({ children }: { children: React.ReactNode }) { return <div className="text-xs font-black uppercase tracking-[.22em] text-purple-400">{children}</div> }
+function Metric({ label, value }: { label: string; value: string | number }) { return <div><div className="text-xs uppercase text-neutral-500">{label}</div><div className="mt-1 font-black text-white">{value}</div></div> }
+function Award({ label, team, detail }: { label: string; team: { team: string; threeRoundDelta: number } | undefined; detail: string }) { return <div className="rounded-2xl border border-neutral-800 bg-[#111] p-4"><div className="text-xs uppercase text-neutral-500">{label}</div><div className="mt-1 font-black text-white">{team?.team ?? 'Not available'}</div><div className="mt-1 text-sm text-purple-300">{detail}</div>{team && <div className="mt-2 text-xs text-neutral-600">{formLabel(team.threeRoundDelta)} over three rounds</div>}</div> }

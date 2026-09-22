@@ -1,5 +1,7 @@
 -- Apply a fully validated Rivalry playoff diff as one transaction. Any stale
 -- row, finalized result, or unsupported patch aborts the entire RPC call.
+begin;
+
 create or replace function public.apply_rivalry_playoff_sync(proposed_updates jsonb)
 returns table(playoff_match_id bigint)
 language plpgsql
@@ -71,3 +73,5 @@ $$;
 
 revoke all on function public.apply_rivalry_playoff_sync(jsonb) from public, anon, authenticated;
 grant execute on function public.apply_rivalry_playoff_sync(jsonb) to service_role;
+
+commit;

@@ -5,10 +5,9 @@ import { competitionIdentity } from '@/lib/competitions'
 import { calculateEloWithHistory, RATING_MODEL_VERSION, type LeagueMatch } from '@/lib/elo'
 import { PowerHistoryChart } from '@/components/PowerHistoryChart'
 import { PowerRankingsTable } from '@/components/PowerRankingsTable'
+import { phaseIsPowerEvidence } from '@/lib/competitionPhase'
 
 export const dynamic = 'force-dynamic'
-const FLOP_TEAMS = ['Flop Reset Frameshift', 'Flop Reset - Frantic', 'Flop Reset | Fracture']
-
 function signed(value: number) { return `${value >= 0 ? '+' : ''}${value.toFixed(1)}` }
 function formLabel(value: number) { return value >= 15 ? 'Rising' : value <= -15 ? 'Falling' : 'Stable' }
 
@@ -20,18 +19,11 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
   const requestedCompetition = compatible.find((competition: any) => String(competition.id) === filters.competition)
   const selectedCompetition = requestedCompetition ?? compatible.find((competition: any) => competition.status === 'active') ?? compatible[0] ?? null
 
-  const scopeProbe = await supabase.from('league_matches').select('competition_id').limit(1)
-  const competitionScoped = !scopeProbe.error
-  let matchResult: { data: any[] | null; error: { message: string } | null }
-  if (competitionScoped) {
-    let query: any = supabase.from('league_matches').select('id, competition_id, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label').eq('format', activeFormat)
-    if (selectedCompetition) query = query.eq('competition_id', selectedCompetition.id)
-    matchResult = await query
-  } else {
-    matchResult = await supabase.from('league_matches').select('id, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label').eq('format', activeFormat) as any
-  }
+  const matchResult = selectedCompetition
+    ? await supabase.from('league_matches').select('id, competition_id, competition_phase, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label').eq('format', activeFormat).eq('competition_id', selectedCompetition.id)
+    : { data: [], error: null }
   const { data: rawMatches, error } = matchResult
-  const allMatches = (rawMatches ?? []) as LeagueMatch[]
+  const allMatches = ((rawMatches ?? []) as LeagueMatch[]).filter((match) => phaseIsPowerEvidence(match.competition_phase))
   const fullEngine = calculateEloWithHistory(allMatches)
   const requestedRound = Number.parseInt(filters.round ?? '', 10)
   const asOfRound = Number.isFinite(requestedRound) && fullEngine.rounds.includes(requestedRound) ? requestedRound : null
@@ -40,7 +32,11 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
   const identity = selectedCompetition ? competitionIdentity(selectedCompetition) : null
   const queryString = new URLSearchParams({ format: activeFormat, ...(selectedCompetition ? { competition: String(selectedCompetition.id) } : {}), ...(asOfRound !== null ? { round: String(asOfRound) } : {}) }).toString()
 
-  const flopSummaries = teamSummaries.filter((team) => FLOP_TEAMS.includes(team.team))
+  const { data: frEntries = [] } = selectedCompetition
+    ? await supabase.from('public_competition_entries').select('display_name_snapshot, fr_team_id').eq('competition_id', selectedCompetition.id).not('fr_team_id', 'is', null)
+    : { data: [] }
+  const flopNames = new Set((frEntries ?? []).map((entry: any) => String(entry.display_name_snapshot)))
+  const flopSummaries = teamSummaries.filter((team) => flopNames.has(team.team))
   const rankedTeams = teamSummaries.filter((team) => team.overallRank !== null)
   const biggestRankRiser = [...rankedTeams].sort((a, b) => b.rankMove - a.rankMove)[0]
   const biggestEloGainer = [...rankedTeams].sort((a, b) => b.lastRoundDelta - a.lastRoundDelta)[0]
@@ -56,11 +52,11 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
       <div className="mt-5 flex flex-wrap gap-2 text-xs text-neutral-500"><span>{identity ? `${identity.league} · ${identity.seasonLabel}` : 'Legacy imported league pool'}</span><span>•</span><span>{activeFormat}</span><span>•</span><span>{asOfRound === null ? 'Current' : `As of Round ${asOfRound}`}</span><span>•</span><span>Model {RATING_MODEL_VERSION}</span></div>
     </header>
 
-    {!competitionScoped && <div className="mt-5 rounded-2xl border border-amber-800/70 bg-amber-950/20 p-4 text-sm text-amber-100"><div className="font-black uppercase tracking-[.16em]">Summer Circuit archive</div><p className="mt-1 text-amber-100/80">These historical rankings currently cover Summer Circuit 2026 only. A new circuit will remain separate until its results have been independently verified.</p></div>}
+    {!selectedCompetition && <div className="mt-5 rounded-2xl border border-amber-800/70 bg-amber-950/20 p-4 text-sm text-amber-100"><div className="font-black uppercase tracking-[.16em]">No rating pool selected</div><p className="mt-1 text-amber-100/80">Power never combines competitions. Add or select a competition in this format before ratings can be calculated.</p></div>}
 
     <form className="mt-6 grid min-w-0 gap-3 rounded-2xl border border-neutral-800 bg-[#111] p-4 sm:grid-cols-3 lg:grid-cols-4">
       <FilterSelect label="Format" name="format" defaultValue={activeFormat}><option value="3v3">3v3</option><option value="2v2">2v2</option></FilterSelect>
-      <label className="min-w-0 text-xs font-bold uppercase tracking-wide text-neutral-500">Competition<select name="competition" defaultValue={selectedCompetition?.id ?? ''} disabled={!competitionScoped} className="mt-1 block min-h-11 w-full min-w-0 rounded-lg border border-neutral-700 bg-[#181818] px-3 text-sm text-white disabled:opacity-50">{compatible.map((competition: any) => { const item = competitionIdentity(competition); return <option key={competition.id} value={competition.id}>{item.league} · {item.seasonLabel}</option> })}</select></label>
+      <label className="min-w-0 text-xs font-bold uppercase tracking-wide text-neutral-500">Competition<select name="competition" defaultValue={selectedCompetition?.id ?? ''} className="mt-1 block min-h-11 w-full min-w-0 rounded-lg border border-neutral-700 bg-[#181818] px-3 text-sm text-white"><option value="">Select competition</option>{compatible.map((competition: any) => { const item = competitionIdentity(competition); return <option key={competition.id} value={competition.id}>{item.league} · {item.seasonLabel}</option> })}</select></label>
       <FilterSelect label="Rankings as of" name="round" defaultValue={asOfRound ?? ''}><option value="">Current</option>{fullEngine.rounds.map((round) => <option key={round} value={round}>After Round {round}</option>)}</FilterSelect>
       <button className="min-h-11 self-end rounded-lg bg-purple-700 px-4 text-sm font-black text-white">View rating pool</button>
     </form>
@@ -76,7 +72,7 @@ export default async function PowerRankings({ searchParams }: { searchParams: Pr
       <PowerRankingsTable rows={rankedTeams} queryString={queryString} />
     </>}
 
-    <details className="mt-12 rounded-2xl border border-neutral-800 bg-[#111] p-5"><summary className="cursor-pointer font-black text-white">How the rating works</summary><div className="mt-4 grid gap-4 text-sm text-neutral-400 md:grid-cols-2"><p><strong className="text-white">Rating pools:</strong> a competition/circuit and format form one independent pool. Raw Elo from separately seeded pools is not directly comparable.</p><p><strong className="text-white">Tier seed:</strong> a team starts at its tier seed. Early results move faster through a higher K-factor.</p><p><strong className="text-white">Expected result:</strong> opponent pre-match Elo sets the expected win chance. Upsets therefore move ratings more.</p><p><strong className="text-white">Margin:</strong> non-forfeit score margin is compared with the normal margin for that tier and round, with a capped multiplier.</p><p><strong className="text-white">Forfeits:</strong> the existing rule is preserved: half K-factor and no margin multiplier. They count officially but never qualify for performance awards. Zero movement remains recommended for future review.</p><p><strong className="text-white">Schedule strength:</strong> average opponent Elo before each played match; recent SOS uses the latest five performance results.</p><p><strong className="text-white">Adjusted form:</strong> average actual result minus expected result. Positive means the team exceeded model expectation.</p><p><strong className="text-white">Limits:</strong> ratings represent tracked league results only. {engine.duplicateCount} duplicate row{engine.duplicateCount === 1 ? '' : 's'} excluded in this view.</p></div></details>
+    <details className="mt-12 rounded-2xl border border-neutral-800 bg-[#111] p-5"><summary className="cursor-pointer font-black text-white">How the rating works</summary><div className="mt-4 grid gap-4 text-sm text-neutral-400 md:grid-cols-2"><p><strong className="text-white">Rating pools:</strong> a competition/circuit and format form one independent pool. Raw Elo from separately seeded pools is not directly comparable.</p><p><strong className="text-white">Tier seed:</strong> a team starts at its tier seed. Early results move faster through a higher K-factor.</p><p><strong className="text-white">Expected result:</strong> opponent pre-match Elo sets the expected win chance. Upsets therefore move ratings more.</p><p><strong className="text-white">Margin:</strong> non-forfeit score margin is compared with the normal margin for that tier and round, with a capped multiplier.</p><p><strong className="text-white">Forfeits and BYEs:</strong> official non-played outcomes produce zero rating movement and do not count as performance samples.</p><p><strong className="text-white">Schedule strength:</strong> average opponent Elo before each played match; recent SOS uses the latest five performance results.</p><p><strong className="text-white">Adjusted form:</strong> average actual result minus expected result. Positive means the team exceeded model expectation.</p><p><strong className="text-white">Limits:</strong> ratings represent tracked league results only. {engine.duplicateCount} duplicate row{engine.duplicateCount === 1 ? '' : 's'} excluded in this view.</p></div></details>
   </main>
 }
 

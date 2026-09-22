@@ -5,6 +5,7 @@ import { formatPublicDate } from '@/lib/results'
 import { normalizeIdentity } from '@/lib/stats'
 import { competitionIdentity } from '@/lib/competitions'
 import { supabase } from '@/lib/supabase'
+import { teamHref } from '@/lib/teamRoutes'
 
 export const dynamic = 'force-dynamic'
 
@@ -36,11 +37,10 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
     playerGroups.set(key, row)
   }
 
-  const teamGroups = new Map<string, { name: string; formats: Set<string>; players: Set<string> }>()
+  const teamGroups = new Map<number, { id: number; name: string; format: string; players: Set<string> }>()
   for (const team of (teams ?? []).filter((entry: any) => entry.name?.toLocaleLowerCase('en-US').includes(needle)) as any[]) {
-    const key = normalizeIdentity(team.name)
-    const row = teamGroups.get(key) ?? { name: team.name, formats: new Set<string>(), players: new Set<string>() }
-    row.formats.add(team.format)
+    const key = Number(team.id)
+    const row = teamGroups.get(key) ?? { id: key, name: team.name, format: team.format, players: new Set<string>() }
     for (const player of team.players ?? []) row.players.add(player.name)
     teamGroups.set(key, row)
   }
@@ -82,7 +82,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
 
       <div className="mt-10">{q.length < 2 ? <EmptyState title="Enter at least two characters" description="Search recognizes canonical player names, aliases, teams, competitions, and recorded opponents."/> : total === 0 ? <EmptyState title={`No results for “${q}”`} description="Try a shorter player name, team name, alias, competition, or opponent."/> : <div className="space-y-12">
         {playerGroups.size ? <section><SectionHeader eyebrow="People" title="Players"/><div className="grid gap-3 md:grid-cols-2">{[...playerGroups.values()].map((player) => <Link key={normalizeIdentity(player.name)} href={`/players/${encodeURIComponent(player.name)}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="text-xl font-black">{player.name}</div><div className="mt-1 text-sm text-neutral-500">{[...player.teams].join(' / ')} · {[...player.formats].join(' · ')}</div>{player.aliases.size ? <div className="mt-2 text-xs text-neutral-600">Aliases: {[...player.aliases].join(', ')}</div> : null}</Link>)}</div></section> : null}
-        {teamGroups.size ? <section><SectionHeader eyebrow="Squads" title="Teams"/><div className="grid gap-3 md:grid-cols-2">{[...teamGroups.values()].map((team) => <Link key={normalizeIdentity(team.name)} href={`/teams/${encodeURIComponent(team.name)}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="text-xl font-black">{team.name}</div><div className="mt-1 text-sm text-neutral-500">{[...team.formats].join(' · ')} · {team.players.size} registered players</div></Link>)}</div></section> : null}
+        {teamGroups.size ? <section><SectionHeader eyebrow="Squads" title="Teams"/><div className="grid gap-3 md:grid-cols-2">{[...teamGroups.values()].map((team) => <Link key={team.id} href={teamHref(team)} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="text-xl font-black">{team.name}</div><div className="mt-1 text-sm text-neutral-500">{team.format} · {team.players.size} registered players</div></Link>)}</div></section> : null}
         {leagueTeamResults.length ? <section><SectionHeader eyebrow="Competition directory" title="League Teams"/><div className="grid gap-3 md:grid-cols-2">{leagueTeamResults.map((entry: any) => { const competition = { name: entry.competition_name, format: entry.competition_format, league_name: entry.competition_league_name, circuit_name: entry.competition_circuit_name, season_year: entry.competition_season_year, region: entry.competition_region }; const context = competitionIdentity(competition); return <Link key={entry.entry_id} href={`/league/teams/${entry.slug}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="text-xl font-black">{entry.display_name_snapshot}</div><div className="mt-1 text-sm text-neutral-500">League Team · {context.league} · {entry.competition_region ?? 'Region TBD'} · {entry.competition_format ?? 'Format TBD'}{entry.tier ? ` · Tier ${entry.tier}` : ''}</div></Link> })}</div></section> : null}
         {leaguePlayerResults.length ? <section><SectionHeader eyebrow="League identities" title="League Players"/><div className="grid gap-3 md:grid-cols-2">{leaguePlayerResults.map((player: any) => <Link key={player.league_player_id} href={`/league/players/${player.slug}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="text-xl font-black">{player.display_name || player.canonical_name}</div><div className="mt-1 text-sm text-neutral-500">League Player{player.linked_fr_player_id ? ' · Linked to FR identity' : ''}</div></Link>)}</div></section> : null}
         {competitionResults.length ? <section><SectionHeader eyebrow="Leagues & tournaments" title="Competitions"/><div className="grid gap-3 md:grid-cols-2">{competitionResults.map((competition: any) => { const identity = competitionIdentity(competition); return <Link key={competition.id} href={`/competitions/${competition.id}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="text-xl font-black">{identity.league}</div><div className="mt-1 text-sm text-neutral-500">{identity.seasonLabel} · {identity.format}</div></Link> })}</div></section> : null}

@@ -1,5 +1,22 @@
+export const PLAYOFF_MATCH_STATUSES = ['tbd', 'scheduled', 'live', 'final'] as const
+export type PlayoffMatchStatus = (typeof PLAYOFF_MATCH_STATUSES)[number]
+
+export function isPlayoffMatchStatus(value: unknown): value is PlayoffMatchStatus {
+  return PLAYOFF_MATCH_STATUSES.includes(value as PlayoffMatchStatus)
+}
+
 export type ParticipantKind = 'team' | 'opponent' | 'entry' | 'tbd'
 export type WinnerSide = 'a' | 'b' | null
+
+export function winnerSideFromDb(value: unknown): WinnerSide {
+  if (value === 1 || value === '1') return 'a'
+  if (value === 2 || value === '2') return 'b'
+  return null
+}
+
+export function winnerSideToDb(value: WinnerSide): 1 | 2 | null {
+  return value === 'a' ? 1 : value === 'b' ? 2 : null
+}
 
 export const PLAYOFF_ROUNDS = [
   'Opening Round',
@@ -75,7 +92,7 @@ export type EditablePlayoffMatch = {
   scoreB: number | null
   bestOf: number | null
   scheduledAt: string
-  status: 'pending' | 'scheduled' | 'live' | 'completed'
+  status: PlayoffMatchStatus
   winnerSide: WinnerSide
   isBye: boolean
   isForfeit: boolean
@@ -88,16 +105,44 @@ export type EditablePlayoffMatch = {
   loserNextSlot: number | null
 }
 
+export type LinkedPlayoffSeriesContext = {
+  seriesId: number
+  competitionId: number | null
+  phase: string | null
+  format: string | null
+  frTeamId: number | null
+  opponentId: number | null
+  opponentName: string | null
+  bestOf: number | null
+  winnerSide: WinnerSide
+  existingPlayoffMatchId?: number | null
+}
+
+export type PlayoffTopologyRow = {
+  playoffMatchId: number
+  roundName: string
+  nextMatchId: number | null
+  nextSlot: number | null
+  loserNextMatchId: number | null
+  loserNextSlot: number | null
+}
+
 export function participantKey(participant: PlayoffParticipant) {
   return participant.kind === 'tbd' ? 'tbd' : `${participant.kind}:${participant.identityId}`
 }
 
 export function validatePlayoffMatch(
   match: EditablePlayoffMatch,
-  linkedSeriesTeamId?: number | null,
+  linkedSeries?: number | null | LinkedPlayoffSeriesContext,
+  expected?: { competitionId?: number | null; format?: string | null; playoffMatchId?: number | null },
 ) {
   const errors: string[] = []
   const participants = [match.participantA, match.participantB]
+  const knownParticipants = participants.filter((participant) => participant.kind !== 'tbd')
+  const linkedContext = typeof linkedSeries === 'object' && linkedSeries !== null ? linkedSeries : null
+  const linkedSeriesTeamId = linkedContext?.frTeamId ?? (typeof linkedSeries === 'number' ? linkedSeries : null)
+
+  if (!isPlayoffMatchStatus(match.status)) errors.push('Select a valid playoff match status.')
 
   if (getPlayoffRoundOrder(match.roundName) === null) errors.push('Select a valid playoff round.')
   if (!Number.isInteger(match.matchOrder) || match.matchOrder < 1) errors.push('Match number must be a positive integer.')
@@ -119,21 +164,23 @@ export function validatePlayoffMatch(
   }
 
   if (match.isBye) {
-    const known = participants.filter((participant) => participant.kind !== 'tbd')
-    if (known.length !== 1) errors.push('A BYE needs exactly one known participant.')
+    if (knownParticipants.length !== 1) errors.push('A BYE needs exactly one known participant.')
     if (match.seriesId || match.scheduledMatchId) errors.push('A BYE cannot link a series or scheduled match.')
     if (match.scoreA !== null || match.scoreB !== null) errors.push('A BYE cannot have a score.')
+    if (match.bestOf !== null) errors.push('A BYE cannot have a best-of value.')
     if (match.isForfeit) errors.push('A match cannot be both a BYE and a forfeit.')
     const expectedWinner = match.participantA.kind !== 'tbd' ? 'a' : 'b'
     if (match.winnerSide !== expectedWinner) errors.push('The known BYE participant must be the winner.')
   }
 
   if (match.isForfeit) {
+    if (knownParticipants.length !== 2) errors.push('A forfeit needs exactly two known participants.')
     if (!match.winnerSide) errors.push('A forfeit needs an explicit winner.')
     if (match.scoreA !== null || match.scoreB !== null) errors.push('Store no competitive score for a forfeit; public display is 0-0.')
   }
 
   if (match.seriesId) {
+    if (knownParticipants.length !== 2) errors.push('A linked playoff series needs exactly two known participants.')
     if (linkedSeriesTeamId && !participants.some((participant) =>
       (participant.kind === 'team' && participant.identityId === linkedSeriesTeamId)
       || (participant.kind === 'entry' && participant.linkedFrTeamId === linkedSeriesTeamId)
@@ -143,16 +190,101 @@ export function validatePlayoffMatch(
     if (match.scoreA !== null || match.scoreB !== null || match.winnerSide || match.isForfeit) {
       errors.push('A linked FR series is the result source of truth; clear local score, winner, and forfeit fields.')
     }
+    if (linkedContext) {
+      if (expected?.competitionId && linkedContext.competitionId !== expected.competitionId) errors.push('The linked series belongs to a different competition.')
+      if (linkedContext.phase !== 'playoffs') errors.push('The linked series must have the playoffs phase.')
+      if (expected?.format && linkedContext.format !== expected.format) errors.push('The linked series format does not match this bracket.')
+      if (linkedContext.existingPlayoffMatchId && linkedContext.existingPlayoffMatchId !== expected?.playoffMatchId) errors.push('The linked series is already attached to another playoff match.')
+      if (match.bestOf && linkedContext.bestOf && match.bestOf !== linkedContext.bestOf) errors.push('The linked series best-of does not match the bracket match.')
+      if (!linkedContext.winnerSide) errors.push('The linked series does not have a decisive canonical result.')
+      const opponentMatches = participants.some((participant) =>
+        (participant.kind === 'opponent' && participant.identityId === linkedContext.opponentId)
+        || (participant.kind === 'entry' && participant.linkedOpponentId === linkedContext.opponentId)
+        || (linkedContext.opponentId === null && participant.snapshot.trim().toLowerCase() === linkedContext.opponentName?.trim().toLowerCase())
+      )
+      if (!opponentMatches) errors.push('The linked series opponent does not match either canonical participant.')
+    }
   } else if (!match.isBye && !match.isForfeit && match.scoreA !== null && match.scoreB !== null) {
     const expectedWinner = match.scoreA > match.scoreB ? 'a' : match.scoreB > match.scoreA ? 'b' : null
     if (expectedWinner !== match.winnerSide) errors.push('Winner does not agree with the entered score.')
   }
 
-  if (match.status === 'completed' && !match.winnerSide && !match.seriesId) errors.push('A Final-status match needs a winner.')
+  if (match.status === 'final' && !match.seriesId && !match.isBye && !match.isForfeit) {
+    if (knownParticipants.length !== 2) errors.push('A played Final needs exactly two known participants.')
+    if (match.scoreA === null || match.scoreB === null) errors.push('A played Final needs both scores.')
+    if (match.scoreA !== null && match.scoreB !== null && match.scoreA === match.scoreB) errors.push('A played Final cannot end tied.')
+  }
+  if (match.status === 'final' && !match.winnerSide && !match.seriesId) errors.push('A Final-status match needs a winner.')
   if (match.nextMatchId && ![1, 2].includes(Number(match.nextSlot))) errors.push('Winner destination needs slot 1 or 2.')
   if (match.loserNextMatchId && ![1, 2].includes(Number(match.loserNextSlot))) errors.push('Loser destination needs slot 1 or 2.')
 
   return [...new Set(errors)]
+}
+
+export function validatePlayoffTopology(
+  sourceMatchId: number,
+  match: EditablePlayoffMatch,
+  rows: PlayoffTopologyRow[],
+) {
+  const errors: string[] = []
+  const sourceRound = getPlayoffRoundOrder(match.roundName)
+  const routes = [
+    { label: 'Winner', id: match.nextMatchId, slot: match.nextSlot },
+    { label: 'Loser', id: match.loserNextMatchId, slot: match.loserNextSlot },
+  ]
+  for (const route of routes) {
+    if (!route.id) continue
+    if (route.id === sourceMatchId) errors.push(`${route.label} route cannot point to the same match.`)
+    if (route.slot !== 1 && route.slot !== 2) errors.push(`${route.label} route needs slot 1 or 2.`)
+    const destination = rows.find((row) => row.playoffMatchId === route.id)
+    if (!destination) {
+      errors.push(`${route.label} route destination does not exist.`)
+      continue
+    }
+    const destinationRound = getPlayoffRoundOrder(destination.roundName)
+    if (sourceRound !== null && destinationRound !== null && destinationRound <= sourceRound) {
+      errors.push(`${route.label} route must point to a later round.`)
+    }
+  }
+  if (match.nextMatchId && match.loserNextMatchId && match.nextMatchId === match.loserNextMatchId && match.nextSlot === match.loserNextSlot) {
+    errors.push('Winner and loser routes cannot target the same slot.')
+  }
+
+  const adjacency = new Map(rows.map((row) => [row.playoffMatchId, [row.nextMatchId, row.loserNextMatchId].filter((id): id is number => Boolean(id))]))
+  adjacency.set(sourceMatchId, routes.map((route) => route.id).filter((id): id is number => Boolean(id)))
+  const visiting = new Set<number>()
+  const visited = new Set<number>()
+  function hasCycle(id: number): boolean {
+    if (visiting.has(id)) return true
+    if (visited.has(id)) return false
+    visiting.add(id)
+    for (const next of adjacency.get(id) ?? []) if (hasCycle(next)) return true
+    visiting.delete(id)
+    visited.add(id)
+    return false
+  }
+  if (hasCycle(sourceMatchId)) errors.push('Bracket routing contains a cycle.')
+  return [...new Set(errors)]
+}
+
+export function advancementDecision(saved: EditablePlayoffMatch, destination: PlayoffParticipant, mode: 'winner' | 'loser') {
+  if (saved.status !== 'final') return { status: 'blocked' as const, message: 'Only a saved Final result can advance.' }
+  const participant = advancingParticipant(saved, mode)
+  if (!participant || participant.kind === 'tbd') return { status: 'blocked' as const, message: 'The saved result has no advancing participant.' }
+  if (participantKey(destination) === participantKey(participant)) return { status: 'noop' as const, message: 'Already advanced — no change made.' }
+  if (destination.kind !== 'tbd') return { status: 'blocked' as const, message: 'Destination slot is occupied by a different participant.' }
+  return { status: 'ready' as const, participant }
+}
+
+export function resultCorrectionConflict(
+  previous: EditablePlayoffMatch,
+  next: EditablePlayoffMatch,
+  downstreamParticipants: PlayoffParticipant[],
+) {
+  const oldWinner = advancingParticipant(previous, 'winner')
+  const newWinner = advancingParticipant(next, 'winner')
+  if (!oldWinner || !newWinner || participantKey(oldWinner) === participantKey(newWinner)) return false
+  return downstreamParticipants.some((participant) => participantKey(participant) === participantKey(oldWinner))
 }
 
 export function advancingParticipant(match: EditablePlayoffMatch, mode: 'winner' | 'loser') {

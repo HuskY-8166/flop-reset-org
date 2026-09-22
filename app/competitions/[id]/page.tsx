@@ -1,11 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { EmptyState, PageHero, ResultBadge, SectionHeader, StatCard } from '@/components/ui'
 import { competitionIdentity, formatsMatch, getCompetitionSummary } from '@/lib/competitions'
 import { formatPublicDate, getSeriesOutcome } from '@/lib/results'
 import { competitionRanks } from '@/lib/stats'
+import { teamHref } from '@/lib/teamRoutes'
+import { seasonSlug } from '@/lib/seasons'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,15 +30,17 @@ export default async function Competition({ params }: { params: Promise<{ id: st
     supabase.from('match_player_stats').select('goals, assists, saves, score, players ( name ), matches!inner ( competition_id, is_forfeit, teams ( name, format ) )').eq('matches.competition_id', competitionId),
   ])
 
-  if (!competition) return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="Competition not found" description="This competition is not available in the public archive." actionHref="/competitions" actionLabel="Back to competitions" /></main>
+  if (!competition) notFound()
 
   const identity = competitionIdentity(competition)
+  const stage = String(competition.current_stage ?? (identity.status === 'completed' ? 'completed' : 'upcoming'))
+  const stageLabel = stage === 'regular_season' ? 'Regular Season' : stage === 'playoffs' ? 'Playoffs' : stage === 'completed' ? 'Completed' : 'Upcoming'
   const summary = getCompetitionSummary({ competition, series: rawSeries ?? [], scheduledMatches: rawUpcoming ?? [] })
   const series = summary.officialSeries as any[]
   const upcoming = summary.upcomingMatches as any[]
   const stats = (rawStats ?? []).filter((row: any) => formatsMatch(competition.format, row.matches?.teams?.format) && !row.matches?.is_forfeit)
 
-  const teams = summary.participatingFlopResetTeams
+  const teams = [...new Map(series.map((row: any) => [Number(row.flop_reset_team_id), { id: Number(row.flop_reset_team_id), name: row.teams?.name ?? 'Unknown' }])).values()]
   const players = new Map<string, any>()
   stats.forEach((row: any) => {
     const name = row.players?.name
@@ -48,13 +53,13 @@ export default async function Competition({ params }: { params: Promise<{ id: st
 
   return <main className="mx-auto w-full min-w-0 max-w-7xl px-4 py-10 md:px-8 md:py-14">
     <PageHero eyebrow={`${identity.league} · ${identity.format}`} title={identity.displayName} description={`${identity.seasonLabel} · ${identity.format}. Results, schedule, squads, and leaders are isolated to this circuit and format.`}>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6"><StatCard label="Status" value={identity.status === 'active' ? 'Playoffs' : identity.status} accent={identity.status === 'active'} /><StatCard label="Series Record" value={`${summary.seriesWins}–${summary.seriesLosses}`} /><StatCard label="Played Games" value={summary.playedGames} /><StatCard label="Game Record" value={`${summary.gameWins}–${summary.gameLosses}`} /><StatCard label="Flop Reset Squads" value={teams.length} /><StatCard label="Upcoming" value={upcoming.length} /></div>
-      {identity.status === 'active' && <Link href={`/competitions/${competitionId}/playoffs`} className="mt-5 inline-flex rounded-xl bg-purple-700 px-5 py-3 text-sm font-black text-white no-underline hover:bg-purple-600">View Summer Circuit Playoffs →</Link>}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-6"><StatCard label="Stage" value={stageLabel} accent={stage === 'playoffs'} /><StatCard label="Series Record" value={`${summary.seriesWins}–${summary.seriesLosses}`} /><StatCard label="Played Games" value={summary.playedGames} /><StatCard label="Game Record" value={`${summary.gameWins}–${summary.gameLosses}`} /><StatCard label="Flop Reset Squads" value={teams.length} /><StatCard label="Upcoming" value={upcoming.length} /></div>
+      <div className="mt-5 flex flex-wrap gap-3"><Link href={`/competitions/archive/${seasonSlug(competition)}`} className="inline-flex rounded-xl border border-purple-700 px-5 py-3 text-sm font-black text-purple-200 no-underline hover:bg-purple-950">View Season Archive →</Link>{stage === 'playoffs' && <Link href={`/competitions/${competitionId}/playoffs`} className="inline-flex rounded-xl bg-[#FF00A6] px-5 py-3 text-sm font-black text-white no-underline hover:brightness-110">View Playoffs →</Link>}</div>
     </PageHero>
     <nav className="sticky top-14 z-20 my-8 max-w-full overflow-x-auto rounded-xl border border-neutral-800 bg-[#0d0d0d]/95 px-4 py-3"><div className="flex min-w-max gap-5 text-xs font-bold uppercase tracking-wide text-neutral-500"><a href="#overview" className="hover:text-purple-300">Overview</a><Link href={`/competitions/${competitionId}/teams`} className="text-purple-300 hover:text-white">Teams</Link><Link href={`/competitions/${competitionId}/playoffs`} className="hover:text-purple-300">Playoffs</Link><a href="#schedule" className="hover:text-purple-300">Schedule</a><a href="#results" className="hover:text-purple-300">Results</a><Link href={`/power-rankings?competition=${competitionId}&format=${encodeURIComponent(competition.format)}`} className="hover:text-purple-300">Power</Link><Link href={`/standings?competition=${competitionId}`} className="hover:text-purple-300">Standings</Link><a href="#leaders" className="hover:text-purple-300">Leaders</a></div></nav>
 
     <section id="overview" className="scroll-mt-28">
-      <SectionHeader eyebrow="Summer Circuit" title="Overview" description={`${identity.seasonLabel} · ${competition.format} results, schedules, squads, leaders, and playoff history.`} />
+      <SectionHeader eyebrow={stageLabel} title="Overview" description={`${identity.seasonLabel} · ${competition.format} results, schedules, squads, leaders, and playoff history.`} />
       <div className="grid gap-4 md:grid-cols-3"><StatCard label="Circuit" value={identity.seasonLabel} /><StatCard label="Format" value={identity.format} /><StatCard label="Official Series" value={series.length} /></div>
       {summary.integrityProblems.length > 0 && <div className="mt-5 rounded-2xl border border-amber-800/60 bg-amber-950/20 p-5"><div className="font-bold text-amber-200">History temporarily incomplete</div><p className="mt-2 text-sm text-amber-100/70">Some recorded results are unavailable while the circuit archive is being corrected.</p></div>}
     </section>
@@ -65,6 +70,6 @@ export default async function Competition({ params }: { params: Promise<{ id: st
 
     <section id="leaders" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Player performance" title="Competition Leaders" description={`Goals, assists, saves, and score from non-forfeit ${competition.format} games, attributed through the historical match squad.`} />{leaders.length ? <div className="overflow-x-auto rounded-2xl border border-neutral-800 bg-[#111]"><table className="min-w-[760px] text-sm"><thead><tr className="bg-[#191919] text-left text-xs uppercase text-neutral-500"><th className="px-4 py-3">Rank</th><th className="px-4 py-3">Player</th><th className="px-4 py-3">Team</th><th className="px-4 py-3">GP</th><th className="px-4 py-3">Goals</th><th className="px-4 py-3">Assists</th><th className="px-4 py-3">Saves</th><th className="px-4 py-3">Score</th><th className="px-4 py-3">G/GP</th></tr></thead><tbody>{leaders.map(({ row: player, rank }) => <tr key={`${player.name}-${player.team}`} className="border-t border-neutral-800"><td className="px-4 py-3 text-neutral-600">#{rank}</td><td className="px-4 py-3"><Link href={`/players/${encodeURIComponent(player.name)}`} className="font-bold text-white hover:underline">{player.name}</Link></td><td className="px-4 py-3 text-neutral-500">{player.team}</td><td className="px-4 py-3">{player.games}</td><td className="px-4 py-3 font-bold text-purple-300">{player.goals}</td><td className="px-4 py-3">{player.assists}</td><td className="px-4 py-3">{player.saves}</td><td className="px-4 py-3">{player.score}</td><td className="px-4 py-3">{(player.goals / player.games).toFixed(2)}</td></tr>)}</tbody></table></div> : <EmptyState title="No player leaders available" description="No non-forfeit player statistics are currently available for this circuit." />}</section>
 
-    <section id="teams" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Competition field" title="Participating Teams" description="The league directory includes verified entries even before Flop Reset has played them." /><Link href={`/competitions/${competitionId}/teams`} className="inline-flex rounded-xl bg-purple-700 px-5 py-3 font-black text-white no-underline hover:bg-purple-600">Browse the full {competition.format} team directory →</Link>{teams.length ? <div className="mt-5 flex flex-wrap gap-3">{teams.map((team) => <Link key={team} href={`/teams/${encodeURIComponent(team)}`} className="rounded-full border border-purple-800 bg-[#111] px-4 py-2 font-bold text-white no-underline hover:border-purple-600">FR · {team}</Link>)}</div> : null}</section>
+    <section id="teams" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Competition field" title="Participating Teams" description="The league directory includes verified entries even before Flop Reset has played them." /><Link href={`/competitions/${competitionId}/teams`} className="inline-flex rounded-xl bg-purple-700 px-5 py-3 font-black text-white no-underline hover:bg-purple-600">Browse the full {competition.format} team directory →</Link>{teams.length ? <div className="mt-5 flex flex-wrap gap-3">{teams.map((team) => <Link key={team.id} href={teamHref(team)} className="rounded-full border border-purple-800 bg-[#111] px-4 py-2 font-bold text-white no-underline hover:border-purple-600">FR · {team.name}</Link>)}</div> : null}</section>
   </main>
 }

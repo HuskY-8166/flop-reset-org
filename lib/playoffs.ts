@@ -1,8 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { getSeriesOutcome } from '@/lib/results'
-import { getPlayoffRoundOrder, getPlayoffTierNumber } from '@/lib/playoffAdmin'
-
-export const FLOP_RESET_PLAYOFF_TEAMS = ['Fracture', 'Frantic', 'Frameshift'] as const
+import { getPlayoffRoundOrder, getPlayoffTierNumber, isPlayoffMatchStatus } from '@/lib/playoffAdmin'
 
 export type PublicPlayoffMatch = {
   id: number
@@ -83,6 +81,10 @@ export function normalizePlayoffData(
         const scheduledMatchId = numberOrNull(match.scheduled_match_id)
         const series = seriesId ? linkedSeries.get(seriesId) : null
         const schedule = scheduledMatchId ? linkedSchedule.get(scheduledMatchId) : null
+        const rawStatus = stringValue(match.status)
+        const status = isPlayoffMatchStatus(rawStatus)
+          ? rawStatus
+          : series ? 'final' : schedule ? 'scheduled' : 'tbd'
         const seriesTeam = series?.teams?.name
         const seriesOpponent = series?.opponent_name
         const scheduledTeam = schedule?.teams?.name
@@ -144,7 +146,7 @@ export function normalizePlayoffData(
           scoreA,
           scoreB,
           winner,
-          status: stringValue(match.status) || (series ? 'completed' : schedule ? 'scheduled' : 'pending'),
+          status,
           isBye: Boolean(match.is_bye),
           isForfeit: Boolean(match.is_forfeit),
           resultLabel,
@@ -177,7 +179,7 @@ export function playoffTeamState(team: string, brackets: PublicPlayoffBracket[])
 
   if (!latest) return { team, tier: 'Awaiting verified seed', round: 'Not seeded', opponent: 'TBD', status: 'Awaiting bracket data', startsAt: null }
   const opponent = shortFlopTeam(latest.teamA) === team ? latest.teamB : latest.teamA
-  const completed = latest.status === 'completed' || Boolean(latest.winner)
+  const completed = latest.status === 'final' || Boolean(latest.winner)
   const won = shortFlopTeam(latest.winner) === team
   const isFinal = latest.roundName.toLowerCase().includes('final') && !latest.roundName.toLowerCase().includes('semi')
   const status = latest.isBye

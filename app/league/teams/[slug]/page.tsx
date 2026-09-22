@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { EmptyState, PageHero, SectionHeader, StatCard } from '@/components/ui'
 import { competitionIdentity } from '@/lib/competitions'
 import { calculateEloWithHistory, type LeagueMatch } from '@/lib/elo'
@@ -23,7 +24,7 @@ export default async function LeagueTeamPage({ params }: { params: Promise<{ slu
   const { slug } = await params
   const entryResult = await supabase.from('public_competition_entries').select('*').eq('slug', slug).maybeSingle()
   const entry = entryResult.data as any
-  if (!entry) return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="League team not found" description="This entry may not have been synced yet, or the directory migration is still pending." actionHref="/competitions" actionLabel="Browse competitions" /></main>
+  if (!entry) notFound()
   const [competitionResult, rosterResult, leagueResult, meetingResult, pageResult] = await Promise.all([
     supabase.from('competitions').select('*').eq('id', entry.competition_id).maybeSingle(),
     supabase.from('public_competition_roster_members').select('*').eq('entry_id', entry.entry_id).order('created_at'),

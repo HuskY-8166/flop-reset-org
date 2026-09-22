@@ -6,6 +6,7 @@ function match(overrides: Partial<LeagueMatch>): LeagueMatch {
     id: overrides.id ?? Math.random(),
     competition_id: 2,
     format: '3v3',
+    competition_phase: 'regular_season',
     round: 'Round 1',
     tier: 'Tier 4',
     team_a: 'A',
@@ -47,6 +48,9 @@ const forfeit = calculateEloWithHistory([
 ])
 assert.equal(forfeit.teamSummaries.find((team) => team.team === 'A')!.giantKillerUpsets, 0)
 assert.equal(forfeit.matchHistory.A[0].displayScore, 'W · FORFEIT · 0–0')
+assert.equal(forfeit.matchHistory.A[0].delta, 0)
+assert.equal(forfeit.teamSummaries.find((team) => team.team === 'A')!.rating, 1425)
+assert.equal(forfeit.teamSummaries.find((team) => team.team === 'A')!.matchesTracked, 0)
 
 const sameRound = calculateEloWithHistory([
   match({ id: 8, team_b: 'B' }),
@@ -71,6 +75,15 @@ assert.throws(() => calculateEloWithHistory([
   match({ id: 14, competition_id: 3 }),
 ]), /multiple competitions/i)
 
+assert.throws(() => calculateEloWithHistory([
+  match({ id: 140, competition_id: null }),
+]), /explicit competition/i)
+
+const bye = calculateEloWithHistory([
+  match({ id: 141, team_b: null, score_a: null, score_b: null, status: 'completed' }),
+])
+assert.equal(bye.teamSummaries.length, 0)
+
 const history = calculateEloWithHistory([
   match({ id: 15, round: 'Round 1', team_a: 'A', team_b: 'B' }),
   match({ id: 16, round: 'Round 2', team_a: 'A', team_b: 'B', score_a: '1', score_b: '3' }),
@@ -78,5 +91,21 @@ const history = calculateEloWithHistory([
 assert.equal(history.teamRoundHistory.A.length, 2)
 assert.equal(history.matchHistory.A[1].opponentRatingBefore, history.matchHistory.B[1].ratingBefore)
 assert.ok(history.teamSummaries.find((team) => team.team === 'A')!.sosFull > 0)
+
+const postseason = calculateEloWithHistory([
+  match({ id: 17, round: 'Round 5', team_a: 'A', team_b: 'B' }),
+  match({ id: 18, round: 'Quarterfinal', competition_phase: 'playoffs', team_a: 'A', team_b: 'B' }),
+])
+const regularOnly = calculateEloWithHistory([
+  match({ id: 17, round: 'Round 5', team_a: 'A', team_b: 'B' }),
+])
+assert.equal(postseason.finalRegularSeasonRound, 5)
+assert.equal(postseason.postseasonRounds[0], 7)
+assert.equal(
+  postseason.finalRegularSeasonSnapshot.find((team) => team.team === 'A')?.rating,
+  regularOnly.teamSummaries.find((team) => team.team === 'A')?.rating,
+  'postseason results must not overwrite the final regular-season snapshot',
+)
+assert.equal(postseason.teamSummaries.find((team) => team.team === 'A')!.confidence, 'Postseason Updated')
 
 console.log('Power Engine domain tests passed.')

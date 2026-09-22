@@ -27,18 +27,20 @@ export default async function RivalryDetail({ params, searchParams }: PageProps)
   const query = searchParams ? await searchParams : {}
   const requestedName = displayOpponent(opponent)
   const requestedKey = normalizeIdentity(requestedName)
+  const requestedOpponentId = /^\d+$/.test(requestedName) ? Number(requestedName) : null
   const [{ data: allSeries }, { data: opponents }, { data: aliases }] = await Promise.all([
     supabase.from('series').select('series_id, opponent_id, competition_id, opponent_name, series_date, best_of, notes, teams ( name, format ), competitions ( * ), matches ( * )').order('series_date', { ascending: false }),
     supabase.from('opponents').select('*'),
     supabase.from('opponent_aliases').select('*'),
   ])
   const identityIndex = buildOpponentIdentityIndex(opponents ?? [], aliases ?? [])
-  const canonicalIdentity = identityIndex.find(requestedName)
+  const canonicalIdentity = requestedOpponentId ? identityIndex.byId.get(requestedOpponentId) ?? null : identityIndex.find(requestedName)
   const canonicalOpponent = canonicalIdentity
     ? (opponents ?? []).find((entry: any) => Number(entry.opponent_id) === canonicalIdentity.opponentId)
     : null
   const opponentSeries = (allSeries ?? []).filter((meeting: any) => canonicalOpponent
-    ? Number(meeting.opponent_id) === Number(canonicalOpponent.opponent_id)
+    ? Number(meeting.opponent_id) === Number(canonicalOpponent.opponent_id) ||
+      (!meeting.opponent_id && identityIndex.resolve({ snapshotName: meeting.opponent_name })?.opponentId === Number(canonicalOpponent.opponent_id))
     : normalizeIdentity(meeting.opponent_name) === requestedKey) as any[]
   if (!opponentSeries.length) notFound()
 

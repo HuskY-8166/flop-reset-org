@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useMemo, useState } from 'react'
-import { FLOP_RESET_PLAYOFF_TEAMS, isFlopResetTeam, playoffTeamState, shortFlopTeam, type PublicPlayoffBracket } from '@/lib/playoffs'
+import { isFlopResetTeam, playoffTeamState, shortFlopTeam, type PublicPlayoffBracket } from '@/lib/playoffs'
 
 function displayTime(value: string | null) {
   if (!value) return 'Time TBD'
@@ -13,6 +13,9 @@ function displayTime(value: string | null) {
 
 export function PlayoffBracket({ brackets }: { brackets: PublicPlayoffBracket[] }) {
   const [teamFilter, setTeamFilter] = useState('All')
+  const flopTeams = useMemo(() => [...new Set(brackets.flatMap((bracket) => bracket.matches)
+    .flatMap((match) => [shortFlopTeam(match.teamA), shortFlopTeam(match.teamB)])
+    .filter((team): team is string => Boolean(team)))].sort(), [brackets])
   const pathIds = useMemo(() => {
     if (teamFilter === 'All') return new Set<number>()
     const allMatches = brackets.flatMap((bracket) => bracket.matches)
@@ -30,7 +33,7 @@ export function PlayoffBracket({ brackets }: { brackets: PublicPlayoffBracket[] 
     return ids
   }, [brackets, teamFilter])
 
-  const watch = FLOP_RESET_PLAYOFF_TEAMS.map((team) => playoffTeamState(team, brackets))
+  const watch = flopTeams.map((team) => playoffTeamState(team, brackets))
 
   return <>
     <section className="mt-10">
@@ -40,9 +43,9 @@ export function PlayoffBracket({ brackets }: { brackets: PublicPlayoffBracket[] 
     </section>
 
     <section className="mt-12">
-      <div className="flex flex-wrap items-end justify-between gap-4"><div><div className="text-xs font-black uppercase tracking-[.22em] text-purple-400">Team path filter</div><h2 className="mt-1 text-3xl font-black text-white">Tournament Brackets</h2></div><div className="flex flex-wrap gap-2" aria-label="Highlight a Flop Reset playoff path">{['All', ...FLOP_RESET_PLAYOFF_TEAMS].map((team) => <button key={team} type="button" onClick={() => setTeamFilter(team)} aria-pressed={teamFilter === team} className={`rounded-full px-4 py-2 text-sm font-bold ${teamFilter === team ? 'bg-purple-700 text-white' : 'border border-neutral-700 bg-[#111] text-neutral-400'}`}>{team}</button>)}</div></div>
+      <div className="flex flex-wrap items-end justify-between gap-4"><div><div className="text-xs font-black uppercase tracking-[.22em] text-purple-400">Team path filter</div><h2 className="mt-1 text-3xl font-black text-white">Tournament Brackets</h2></div><div className="flex flex-wrap gap-2" aria-label="Highlight a Flop Reset playoff path">{['All', ...flopTeams].map((team) => <button key={team} type="button" onClick={() => setTeamFilter(team)} aria-pressed={teamFilter === team} className={`rounded-full px-4 py-2 text-sm font-bold ${teamFilter === team ? 'bg-purple-700 text-white' : 'border border-neutral-700 bg-[#111] text-neutral-400'}`}>{team}</button>)}</div></div>
 
-      {brackets.length === 0 ? <div className="mt-6 rounded-3xl border border-dashed border-amber-800/70 bg-amber-950/10 p-8 text-center"><h3 className="text-2xl font-black text-white">Awaiting verified playoff seeds</h3><p className="mx-auto mt-2 max-w-2xl text-sm text-neutral-400">No official bracket has been recorded yet. Fracture, Frantic, and Frameshift will appear here after their tier assignments and opening slots are confirmed.</p></div> : <div className="mt-6 space-y-8">{brackets.map((bracket) => {
+      {brackets.length === 0 ? <div className="mt-6 rounded-3xl border border-dashed border-amber-800/70 bg-amber-950/10 p-8 text-center"><h3 className="text-2xl font-black text-white">Awaiting verified playoff seeds</h3><p className="mx-auto mt-2 max-w-2xl text-sm text-neutral-400">Registered squads will appear here after their tier assignments and opening slots are confirmed.</p></div> : <div className="mt-6 space-y-8">{brackets.map((bracket) => {
         const rounds = [...new Set(bracket.matches.map((match) => match.roundName))]
         return <article key={bracket.id} className="rounded-3xl border border-neutral-800 bg-[#0f0f0f] p-4 md:p-6"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="text-xs font-bold uppercase tracking-[.18em] text-purple-400">{bracket.tier}</div><h3 className="mt-1 text-2xl font-black text-white">{bracket.name}</h3></div><span className="rounded-full border border-neutral-700 px-3 py-1 text-xs font-bold uppercase text-neutral-400">{bracket.status}</span></div><div className="mt-6 overflow-x-auto pb-3"><div className="grid min-w-max auto-cols-[minmax(245px,285px)] grid-flow-col gap-5">{rounds.map((round) => <section key={round}><h4 className="mb-3 text-sm font-black uppercase tracking-[.14em] text-neutral-500">{round}</h4><div className="space-y-4">{bracket.matches.filter((match) => match.roundName === round).map((match) => {
           const relevant = teamFilter === 'All' || pathIds.has(match.id)

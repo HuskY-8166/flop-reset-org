@@ -5,20 +5,23 @@ import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
 import { formatCompetitionAdminLabel } from '@/lib/competitions'
 import {
-  advancingParticipant,
+  advancementDecision,
   getNextPlayoffMatchOrder,
   getPlayoffRoundOrder,
   getPlayoffTierNumber,
   participantDestinationPatch,
-  participantKey,
+  resultCorrectionConflict,
   PLAYOFF_ROUNDS,
   validatePlayoffMatch,
+  validatePlayoffTopology,
+  winnerSideFromDb,
+  winnerSideToDb,
   type EditablePlayoffMatch,
   type ParticipantKind,
   type PlayoffParticipant,
   type WinnerSide,
 } from '@/lib/playoffAdmin'
-import { FLOP_RESET_PLAYOFF_TEAMS, playoffRoundOrder, shortFlopTeam } from '@/lib/playoffs'
+import { playoffRoundOrder, shortFlopTeam } from '@/lib/playoffs'
 import { getSeriesOutcome } from '@/lib/results'
 import { supabase } from '@/lib/supabase'
 
@@ -35,7 +38,7 @@ const EMPTY_MATCH: EditablePlayoffMatch = {
   scoreB: null,
   bestOf: null,
   scheduledAt: '',
-  status: 'pending',
+  status: 'tbd',
   winnerSide: null,
   isBye: false,
   isForfeit: false,
@@ -78,10 +81,10 @@ function draftFromRow(row: Row, entries: Row[] = []): EditablePlayoffMatch {
     scoreB: numberOrNull(row.score_b),
     bestOf: numberOrNull(row.best_of),
     scheduledAt: row.scheduled_at ? String(row.scheduled_at).slice(0, 16) : '',
-    status: row.status === 'completed' || row.status === 'final'
-      ? 'completed'
-      : row.status === 'live' ? 'live' : row.status === 'scheduled' ? 'scheduled' : 'pending',
-    winnerSide: row.winner_side === 'a' || row.winner_side === 'b' ? row.winner_side : null,
+    status: row.status === 'final'
+      ? 'final'
+      : row.status === 'live' ? 'live' : row.status === 'scheduled' ? 'scheduled' : 'tbd',
+    winnerSide: winnerSideFromDb(row.winner_side),
     isBye: Boolean(row.is_bye),
     isForfeit: Boolean(row.is_forfeit),
     seriesId: numberOrNull(row.series_id),
@@ -142,7 +145,7 @@ export function PlayoffAdminEditor() {
       supabase.from('competition_entries').select('entry_id, competition_id, fr_team_id, opponent_id, display_name_snapshot, tier, competitive_status, status').order('display_name_snapshot'),
       supabase.from('playoff_brackets').select('*').order('tier'),
       supabase.from('playoff_matches').select('*').order('match_order'),
-      supabase.from('series').select('series_id, competition_id, flop_reset_team_id, opponent_name, series_date, notes, teams(name, format), matches(*)').order('series_date', { ascending: false }),
+      supabase.from('series').select('series_id, competition_id, competition_phase, flop_reset_team_id, opponent_id, opponent_name, series_date, best_of, notes, teams(name, format), matches(*)').order('series_date', { ascending: false }),
       supabase.from('scheduled_matches').select('scheduled_id, competition_id, flop_reset_team_id, opponent_name, match_date, match_time, status, teams(name, format)').order('match_date'),
       supabase.from('playoff_matches').select('playoff_match_id, team_a_name, team_b_name, best_of, is_forfeit, score_a, score_b, winner_name, flop_reset_team_a_id, opponent_a_id, competition_entry_a_id').limit(1),
     ])
@@ -209,6 +212,9 @@ export function PlayoffAdminEditor() {
     const pathMatches = teamFilter === 'All' || shortFlopTeam(displayParticipant(row, 'a')) === teamFilter || shortFlopTeam(displayParticipant(row, 'b')) === teamFilter
     return roundMatches && pathMatches
   })
+  const flopResetPaths = [...new Set(entries
+    .filter((entry) => String(entry.competition_id) === competitionId && entry.fr_team_id)
+    .flatMap((entry) => { const team = shortFlopTeam(entry.display_name_snapshot); return team ? [team] : [] }))].sort()
 
   const selectedRow = matches.find((row) => Number(row.playoff_match_id) === selectedMatchId) ?? null
   const linkedSeries = series.find((row) => Number(row.series_id) === draft.seriesId) ?? null
@@ -221,6 +227,19 @@ export function PlayoffAdminEditor() {
   const effectiveWinnerSide: WinnerSide = linkedSeriesOutcome && linkedSeriesTeamSide
     ? linkedSeriesOutcome.won ? linkedSeriesTeamSide : linkedSeriesOutcome.lost ? linkedSeriesTeamSide === 'a' ? 'b' : 'a' : null
     : draft.winnerSide
+
+  async function writePlayoffAudit(action: string, beforeData: unknown, afterData: unknown, reason?: string) {
+    const { data } = await supabase.auth.getUser()
+    await supabase.from('admin_audit_log').insert({
+      admin_user_id: data.user?.id ?? null,
+      entity_type: 'playoff_match',
+      entity_id: String(selectedMatchId ?? ''),
+      action,
+      before_data: beforeData,
+      after_data: afterData,
+      reason: reason ?? null,
+    })
+  }
 
   function selectMatch(row: Row) {
     const nextDraft = draftFromRow(row, entries)
@@ -327,7 +346,7 @@ export function PlayoffAdminEditor() {
           scoreA: null,
           scoreB: null,
           bestOf: null,
-          status: 'completed',
+          status: 'final',
           winnerSide: draft.participantA.kind !== 'tbd' ? 'a' : draft.participantB.kind !== 'tbd' ? 'b' : null,
           isForfeit: false,
           seriesId: null,
@@ -340,7 +359,35 @@ export function PlayoffAdminEditor() {
           : draft
     setDraft(normalized)
     const normalizedRoundOrder = getPlayoffRoundOrder(normalized.roundName)
-    const errors = validatePlayoffMatch(normalized, linkedSeries?.flop_reset_team_id)
+    const linkedContext = linkedSeries ? {
+      seriesId: Number(linkedSeries.series_id),
+      competitionId: numberOrNull(linkedSeries.competition_id),
+      phase: String(linkedSeries.competition_phase ?? '') || null,
+      format: String(linkedSeries.teams?.format ?? '') || null,
+      frTeamId: numberOrNull(linkedSeries.flop_reset_team_id),
+      opponentId: numberOrNull(linkedSeries.opponent_id),
+      opponentName: String(linkedSeries.opponent_name ?? '') || null,
+      bestOf: numberOrNull(linkedSeries.best_of),
+      winnerSide: linkedSeriesOutcome && linkedSeriesTeamSide
+        ? linkedSeriesOutcome.won ? linkedSeriesTeamSide : linkedSeriesOutcome.lost ? linkedSeriesTeamSide === 'a' ? 'b' as const : 'a' as const : null
+        : null,
+      existingPlayoffMatchId: numberOrNull(matches.find((row) => Number(row.series_id) === Number(linkedSeries.series_id))?.playoff_match_id),
+    } : null
+    const errors = validatePlayoffMatch(normalized, linkedContext, {
+      competitionId: Number(competitionId),
+      format: selectedCompetition?.format ?? null,
+      playoffMatchId: selectedMatchId,
+    })
+    if (advancedStructure) {
+      errors.push(...validatePlayoffTopology(selectedMatchId, normalized, bracketMatches.map((row) => ({
+        playoffMatchId: Number(row.playoff_match_id),
+        roundName: String(row.round_name ?? ''),
+        nextMatchId: numberOrNull(row.next_match_id),
+        nextSlot: numberOrNull(row.next_slot),
+        loserNextMatchId: numberOrNull(row.loser_next_match_id),
+        loserNextSlot: numberOrNull(row.loser_next_slot),
+      }))))
+    }
     if (errors.length) {
       setMessage(`Save blocked: ${errors.join(' ')}`)
       return
@@ -354,6 +401,15 @@ export function PlayoffAdminEditor() {
       return
     }
     if (routingChanged() && !confirm('Save advanced bracket-routing changes? Incorrect destinations can damage the tournament topology.')) return
+
+    const downstreamParticipants = [
+      originalDraft.nextMatchId ? matches.find((row) => Number(row.playoff_match_id) === originalDraft.nextMatchId) : null,
+      originalDraft.loserNextMatchId ? matches.find((row) => Number(row.playoff_match_id) === originalDraft.loserNextMatchId) : null,
+    ].flatMap((row) => row ? [participantFromRow(row, 'a', entries), participantFromRow(row, 'b', entries)] : [])
+    if (resultCorrectionConflict(originalDraft, normalized, downstreamParticipants)) {
+      setMessage('Save blocked: the prior winner has already advanced. Reconcile the downstream slot explicitly before correcting this result.')
+      return
+    }
 
     const winnerParticipant = normalized.winnerSide === 'a' ? normalized.participantA : normalized.winnerSide === 'b' ? normalized.participantB : null
     const payload = {
@@ -372,8 +428,8 @@ export function PlayoffAdminEditor() {
       score_b: normalized.scoreB,
       best_of: normalized.bestOf,
       scheduled_at: normalized.scheduledAt || null,
-      status: normalized.status === 'pending' ? 'tbd' : normalized.status,
-      winner_side: normalized.winnerSide,
+      status: normalized.status,
+      winner_side: winnerSideToDb(normalized.winnerSide),
       winner_name: winnerParticipant?.snapshot || null,
       is_bye: normalized.isBye,
       is_forfeit: normalized.isForfeit,
@@ -390,6 +446,12 @@ export function PlayoffAdminEditor() {
       setMessage(`Save failed: ${error.message}`)
       return
     }
+    await writePlayoffAudit(
+      normalized.isBye ? 'bye_saved' : normalized.isForfeit ? 'forfeit_saved' : normalized.seriesId ? 'series_link_saved' : 'result_saved',
+      selectedRow,
+      payload,
+      routingChanged() ? 'Includes explicitly confirmed bracket-routing changes.' : undefined,
+    )
     setMessage(normalized.isBye
       ? 'BYE saved: participant advanced with no series, game, W/L, stats, or Power evidence.'
       : normalized.seriesId ? 'Playoff link saved. The canonical FR series remains the result source of truth.' : 'Playoff match saved.')
@@ -403,16 +465,11 @@ export function PlayoffAdminEditor() {
   }
 
   async function advance(mode: 'winner' | 'loser') {
-    if (!selectedMatchId) return
-    if (draft.status !== 'completed') {
-      setMessage('Advancement is available only for a Final-status match.')
-      return
-    }
-    const effectiveDraft = { ...draft, winnerSide: effectiveWinnerSide }
-    const participant = advancingParticipant(effectiveDraft, mode)
-    const destinationId = mode === 'winner' ? draft.nextMatchId : draft.loserNextMatchId
-    const destinationSlot = mode === 'winner' ? draft.nextSlot : draft.loserNextSlot
-    if (!participant || !destinationId || (destinationSlot !== 1 && destinationSlot !== 2)) {
+    if (!selectedMatchId || !selectedRow) return
+    const persistedDraft = { ...draftFromRow(selectedRow, entries), winnerSide: effectiveWinnerSide }
+    const destinationId = mode === 'winner' ? persistedDraft.nextMatchId : persistedDraft.loserNextMatchId
+    const destinationSlot = mode === 'winner' ? persistedDraft.nextSlot : persistedDraft.loserNextSlot
+    if (!destinationId || (destinationSlot !== 1 && destinationSlot !== 2)) {
       setMessage(`${mode === 'winner' ? 'Winner' : 'Loser'} advancement is not fully configured.`)
       return
     }
@@ -422,14 +479,12 @@ export function PlayoffAdminEditor() {
       return
     }
     const occupied = participantFromRow(destination, destinationSlot === 1 ? 'a' : 'b', entries)
-    if (occupied.kind !== 'tbd') {
-      if (participantKey(occupied) === participantKey(participant)) {
-        setMessage(`${participant.snapshot} is already in ${destinationLabel(destinationId, destinationSlot)}. No duplicate advancement was written.`)
-      } else {
-        setMessage(`Destination is occupied by ${occupied.snapshot}. Advancement blocked.`)
-      }
+    const decision = advancementDecision(persistedDraft, occupied, mode)
+    if (decision.status !== 'ready') {
+      setMessage(decision.message)
       return
     }
+    const participant = decision.participant
     const action = mode === 'winner' ? 'Advance winner' : 'Advance loser to 3rd place'
     if (!confirm(`${action}: ${participant.snapshot} → ${destinationLabel(destinationId, destinationSlot)}?`)) return
     const { error } = await supabase.from('playoff_matches')
@@ -439,6 +494,7 @@ export function PlayoffAdminEditor() {
       setMessage(`Advancement failed: ${error.message}`)
       return
     }
+    await writePlayoffAudit(mode === 'winner' ? 'winner_advanced' : 'loser_advanced', destination, participantDestinationPatch(participant, destinationSlot))
     setMessage(`${participant.snapshot} advanced to ${destinationLabel(destinationId, destinationSlot)}.`)
     await loadData(selectedMatchId)
   }
@@ -487,7 +543,7 @@ export function PlayoffAdminEditor() {
       </section>
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <SelectField label="Preview round" value={roundFilter} onChange={setRoundFilter} options={['All', ...rounds].map((value) => ({ value, label: value }))} />
-        <SelectField label="FR path" value={teamFilter} onChange={setTeamFilter} options={['All', ...FLOP_RESET_PLAYOFF_TEAMS].map((value) => ({ value, label: value }))} />
+        <SelectField label="FR path" value={teamFilter} onChange={setTeamFilter} options={['All', ...flopResetPaths].map((value) => ({ value, label: value }))} />
       </div>
       {loading ? <p className="mt-5 text-sm text-neutral-500">Loading playoff data…</p> : visibleMatches.length ? <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">{visibleMatches.map((row) => {
         const active = Number(row.playoff_match_id) === selectedMatchId
@@ -522,7 +578,7 @@ export function PlayoffAdminEditor() {
       </div>
 
       <div className="mt-5 grid min-w-0 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <SelectField label="Status" value={draft.status} onChange={(value) => setDraft({ ...draft, status: value as EditablePlayoffMatch['status'] })} options={[['pending', 'TBD'], ['scheduled', 'Scheduled'], ['live', 'Live'], ['completed', 'Final']].map(([value, label]) => ({ value, label }))} />
+        <SelectField label="Status" value={draft.status} onChange={(value) => setDraft({ ...draft, status: value as EditablePlayoffMatch['status'] })} options={[['tbd', 'TBD'], ['scheduled', 'Scheduled'], ['live', 'Live'], ['final', 'Final']].map(([value, label]) => ({ value, label }))} />
         <SelectField label="Winner" value={effectiveWinnerSide ?? ''} onChange={(value) => setDraft({ ...draft, winnerSide: (value || null) as WinnerSide })} disabled={Boolean(draft.seriesId) || draft.isBye} options={[{ value: '', label: 'None' }, { value: 'a', label: 'Participant 1' }, { value: 'b', label: 'Participant 2' }]} />
         <SelectField label="Linked series" value={String(draft.seriesId ?? '')} onChange={(value) => setDraft({ ...draft, seriesId: numberOrNull(value), scoreA: null, scoreB: null, winnerSide: null, isForfeit: false })} disabled={draft.isBye} options={[{ value: '', label: 'None' }, ...filteredSeries.map((row) => ({ value: String(row.series_id), label: `#${row.series_id} · ${row.teams?.name ?? 'FR'} vs ${row.opponent_name} · ${row.series_date}` }))]} />
         <SelectField label="Linked scheduled match" value={String(draft.scheduledMatchId ?? '')} onChange={(value) => setDraft({ ...draft, scheduledMatchId: numberOrNull(value) })} disabled={draft.isBye} options={[{ value: '', label: 'None' }, ...filteredSchedule.map((row) => ({ value: String(row.scheduled_id), label: `#${row.scheduled_id} · ${row.teams?.name ?? 'FR'} vs ${row.opponent_name} · ${row.match_date}` }))]} />

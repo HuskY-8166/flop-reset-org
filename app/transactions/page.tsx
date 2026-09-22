@@ -11,11 +11,11 @@ export default async function Transactions() {
   const [{ data: memberships }, { data: players }, { data: teams }, { data: stats }] = await Promise.all([
     supabase.from('player_team_memberships').select('*'),
     supabase.from('players').select('player_id, name'),
-    supabase.from('teams').select('team_id, name, format'),
-    supabase.from('match_player_stats').select('player_id, players ( name, teams ( name, format ) ), matches ( match_date )'),
+    supabase.from('teams').select('id, name, format'),
+    supabase.from('match_player_stats').select('player_id, players ( name ), matches ( match_date, teams ( name, format ) )'),
   ])
   const playerById = new Map((players ?? []).map((player: any) => [String(player.player_id), player.name]))
-  const teamById = new Map((teams ?? []).map((team: any) => [String(team.team_id), team]))
+  const teamById = new Map((teams ?? []).map((team: any) => [String(team.id), team]))
   const events: Event[] = []
 
   for (const membership of memberships ?? []) {
@@ -32,8 +32,8 @@ export default async function Transactions() {
   for (const row of stats ?? []) {
     const entry = row as any
     const player = entry.players?.name
-    const team = entry.players?.teams?.name
-    const format = entry.players?.teams?.format
+    const team = entry.matches?.teams?.name
+    const format = entry.matches?.teams?.format
     const date = entry.matches?.match_date
     if (!player || !team || !format || !date) continue
     const key = `${player}|${format}`

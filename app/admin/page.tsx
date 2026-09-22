@@ -8,6 +8,7 @@ import Papa from 'papaparse'
 import { supabase } from '@/lib/supabase'
 import { PlayoffAdminEditor } from '@/components/PlayoffAdminEditor'
 import { LeagueDirectoryAdmin, LeagueDirectoryHealth } from '@/components/LeagueDirectoryAdmin'
+import { SeasonArchiveAdmin } from '@/components/SeasonArchiveAdmin'
 import { parseLeagueMatches } from '@/lib/parseLeagueMatches'
 import { formatCompetitionAdminLabel } from '@/lib/competitions'
 import { formatPublicDate } from '@/lib/results'
@@ -25,6 +26,8 @@ import {
   type PlayerSummaryRow,
   type TrackingCoverage,
 } from '@/lib/ballchasingImport'
+import { normalizeOpponentName } from '@/lib/opponents'
+import type { CompetitionPhase } from '@/lib/competitionPhase'
 
 type Competition = {
   id: number
@@ -42,6 +45,34 @@ type TeamRegistration = {
   id: number
   name: string
   format: string
+}
+
+type PlayoffImportTarget = {
+  playoff_match_id: number
+  bracket_id: number
+  round_name: string | null
+  team_a_name: string | null
+  team_b_name: string | null
+  flop_reset_team_a_id: number | null
+  flop_reset_team_b_id: number | null
+  opponent_a_id: number | null
+  opponent_b_id: number | null
+  competition_entry_a_id: number | null
+  competition_entry_b_id: number | null
+  best_of: number | null
+  is_bye: boolean | null
+  is_forfeit: boolean | null
+  series_id: number | null
+  playoff_brackets?: { competition_id?: number | null; tier?: string | null; name?: string | null } | null
+}
+
+type CompetitionEntryLink = {
+  entry_id: number
+  competition_id: number
+  fr_team_id: number | null
+  opponent_id: number | null
+  display_name_snapshot: string
+  tier: string | null
 }
 
 type Game = {
@@ -93,6 +124,15 @@ type RebuildHealth = {
     seriesWithoutGames: number
     playedGamesWithoutStats: number
     forfeitGameRows: number
+    phaseMismatches: number
+    playoffSeriesMissingLink: number
+    duplicateSeries: number
+    crossCompetitionLeaks: number
+    invalidTopology: number
+    conflictingAdvancement: number
+    unresolvedIdentity: number
+    wrongCompetitionEntry: number
+    tierMismatches: number
   }
   checks: {
     competitionMismatches: number
@@ -112,6 +152,9 @@ const EMPTY_REBUILD_HEALTH: RebuildHealth = {
     replayIds: 0, duplicateReplayIds: 0, teamsRepresented: 0, advancedRows: 0,
     orphanPlayerRows: 0, wrongPlayerRowGames: 0, seriesWithoutGames: 0,
     playedGamesWithoutStats: 0, forfeitGameRows: 0,
+    phaseMismatches: 0, playoffSeriesMissingLink: 0, duplicateSeries: 0,
+    crossCompetitionLeaks: 0, invalidTopology: 0, conflictingAdvancement: 0,
+    unresolvedIdentity: 0, wrongCompetitionEntry: 0, tierMismatches: 0,
   },
   checks: {
     competitionMismatches: 0,
@@ -347,6 +390,7 @@ function processSkillUpdate(stat: PlayerStat) {
 
 export default function Admin() {
   const router = useRouter()
+  const [adminReady, setAdminReady] = useState(false)
 
   const [tab, setTab] = useState<
     'add' |
@@ -354,6 +398,7 @@ export default function Admin() {
     'schedule' |
     'rankings' |
     'playoffs' |
+    'archive' |
     'directory' |
     'manage' |
     'rebuild'
@@ -361,7 +406,7 @@ export default function Admin() {
 
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get('tab')
-    if (requested === 'add' || requested === 'import' || requested === 'schedule' || requested === 'rankings' || requested === 'playoffs' || requested === 'directory' || requested === 'manage' || requested === 'rebuild') {
+    if (requested === 'add' || requested === 'import' || requested === 'schedule' || requested === 'rankings' || requested === 'playoffs' || requested === 'archive' || requested === 'directory' || requested === 'manage' || requested === 'rebuild') {
       setTab(requested)
     }
   }, [])
@@ -407,6 +452,9 @@ export default function Admin() {
   const [matchRound, setMatchRound] =
     useState('')
 
+  const [resultPhase, setResultPhase] =
+    useState<CompetitionPhase>('regular_season')
+
   const [message, setMessage] =
     useState('')
 
@@ -430,6 +478,18 @@ export default function Admin() {
 
   const [importBestOf, setImportBestOf] =
     useState('')
+
+  const [importSeriesType, setImportSeriesType] =
+    useState<CompetitionPhase>('regular_season')
+
+  const [importPlayoffMatchId, setImportPlayoffMatchId] =
+    useState('')
+
+  const [playoffImportTargets, setPlayoffImportTargets] =
+    useState<PlayoffImportTarget[]>([])
+
+  const [competitionEntryLinks, setCompetitionEntryLinks] =
+    useState<CompetitionEntryLink[]>([])
 
   const [games, setGames] =
     useState<Game[]>([])
@@ -537,6 +597,9 @@ export default function Admin() {
 
   const [prCompetitionId, setPrCompetitionId] =
     useState('')
+
+  const [prPhase, setPrPhase] =
+    useState<CompetitionPhase>('regular_season')
 
   const [prScopeAvailable, setPrScopeAvailable] =
     useState(false)
@@ -839,29 +902,35 @@ export default function Admin() {
       competitionsCount, teamsCount, playersCount, opponentsCount,
       seriesCount, matchesCount, statsCount, leagueCount, scheduleCount,
       bracketsCount, playoffMatchesCount, seriesRows, matchRows, statRows,
-      playerRows, opponentRows, opponentAliasRows,
+      playerRows, opponentRows, opponentAliasRows, playoffRows, bracketRows, entryRows,
     ] = await Promise.all([
       countTable('competitions'), countTable('teams'), countTable('players'), countTable('opponents'),
       countTable('series'), countTable('matches'), countTable('match_player_stats'), countTable('league_matches'),
       countTable('scheduled_matches'), countTable('playoff_brackets'), countTable('playoff_matches'),
-      supabase.from('series').select('series_id, flop_reset_team_id, notes, competitions(format), teams(format)'),
+      supabase.from('series').select('series_id, competition_id, competition_phase, flop_reset_team_id, opponent_id, opponent_name, series_date, notes, competitions(format), teams(format)'),
       supabase.from('matches').select('match_id, series_id, is_forfeit, replay_id, match_date, teams(format)'),
       supabase.from('match_player_stats').select('match_id, percentage_supersonic_speed, percentage_most_back, percentage_defensive_half, percentage_defensive_third, avg_distance_to_ball, zero_boost_pct'),
       supabase.from('players').select('name, aliases').in('name', ['aktionrl', 'droll', 'HuskY']),
       supabase.from('opponents').select('opponent_id, normalized_name').in('normalized_name', ['ohio midlads', 'sbc blue angels']),
       supabase.from('opponent_aliases').select('opponent_id, normalized_alias').in('normalized_alias', ['midlads', 'sbc angels']),
+      supabase.from('playoff_matches').select('playoff_match_id, bracket_id, series_id, round_name, round_order, next_match_id, next_slot, loser_next_match_id, loser_next_slot, competition_entry_a_id, competition_entry_b_id'),
+      supabase.from('playoff_brackets').select('bracket_id, competition_id, tier'),
+      supabase.from('competition_entries').select('entry_id, competition_id, tier, opponent_id, fr_team_id'),
     ])
 
     const failures = [
       competitionsCount, teamsCount, playersCount, opponentsCount, seriesCount,
       matchesCount, statsCount, leagueCount, scheduleCount, bracketsCount,
       playoffMatchesCount, seriesRows, matchRows, statRows, playerRows,
-      opponentRows, opponentAliasRows,
+      opponentRows, opponentAliasRows, playoffRows, bracketRows, entryRows,
     ].flatMap((result) => result.error ? [result.error.message] : [])
 
     const seriesData = (seriesRows.data ?? []) as any[]
     const matchesData = (matchRows.data ?? []) as any[]
     const statsData = (statRows.data ?? []) as any[]
+    const playoffData = (playoffRows.data ?? []) as any[]
+    const bracketData = (bracketRows.data ?? []) as any[]
+    const entryData = (entryRows.data ?? []) as any[]
     const replayCounts = new Map<string, number>()
     const playerRowsByMatch = new Map<number, number>()
     for (const row of statsData) {
@@ -906,6 +975,24 @@ export default function Admin() {
       row.avg_distance_to_ball,
       row.zero_boost_pct,
     ].some((value) => value !== null && value !== undefined)).length
+    const seriesById = new Map(seriesData.map((row) => [Number(row.series_id), row]))
+    const bracketById = new Map(bracketData.map((row) => [Number(row.bracket_id), row]))
+    const playoffById = new Map(playoffData.map((row) => [Number(row.playoff_match_id), row]))
+    const entryById = new Map(entryData.map((row) => [Number(row.entry_id), row]))
+    const linkedSeriesIds = new Set(playoffData.map((row) => Number(row.series_id)).filter(Number.isFinite))
+    const phaseMismatches = playoffData.filter((row) => row.series_id && seriesById.get(Number(row.series_id))?.competition_phase !== 'playoffs').length
+    const playoffSeriesMissingLink = seriesData.filter((row) => row.competition_phase === 'playoffs' && !linkedSeriesIds.has(Number(row.series_id))).length
+    const seriesKeys = new Map<string, number>()
+    seriesData.forEach((row) => { const key = `${row.competition_id}|${row.flop_reset_team_id}|${row.opponent_id ?? String(row.opponent_name ?? '').toLowerCase()}|${row.series_date}`; seriesKeys.set(key, (seriesKeys.get(key) ?? 0) + 1) })
+    const duplicateSeries = [...seriesKeys.values()].filter((count) => count > 1).reduce((sum, count) => sum + count - 1, 0)
+    const crossCompetitionLeaks = playoffData.filter((row) => { const bracket = bracketById.get(Number(row.bracket_id)); const series = seriesById.get(Number(row.series_id)); return row.series_id && bracket && series && Number(bracket.competition_id) !== Number(series.competition_id) }).length
+    const invalidTopology = playoffData.filter((row) => [row.next_match_id, row.loser_next_match_id].some((targetId) => targetId && (Number(targetId) === Number(row.playoff_match_id) || !playoffById.has(Number(targetId)) || Number(playoffById.get(Number(targetId))?.round_order ?? 0) <= Number(row.round_order ?? 0)))).length
+    const routeSlots = new Map<string, number>()
+    playoffData.forEach((row) => { for (const [target, slot] of [[row.next_match_id, row.next_slot], [row.loser_next_match_id, row.loser_next_slot]]) if (target && slot) { const key = `${target}|${slot}`; routeSlots.set(key, (routeSlots.get(key) ?? 0) + 1) } })
+    const conflictingAdvancement = [...routeSlots.values()].filter((count) => count > 1).length
+    const unresolvedIdentity = seriesData.filter((row) => !row.opponent_id).length
+    const wrongCompetitionEntry = playoffData.flatMap((row) => [row.competition_entry_a_id, row.competition_entry_b_id].filter(Boolean).map((id) => ({ bracket: bracketById.get(Number(row.bracket_id)), entry: entryById.get(Number(id)) }))).filter(({ bracket, entry }) => !entry || Number(entry.competition_id) !== Number(bracket?.competition_id)).length
+    const tierMismatches = playoffData.flatMap((row) => [row.competition_entry_a_id, row.competition_entry_b_id].filter(Boolean).map((id) => ({ bracket: bracketById.get(Number(row.bracket_id)), entry: entryById.get(Number(id)) }))).filter(({ bracket, entry }) => entry?.tier && String(entry.tier) !== String(bracket?.tier)).length
 
     const counts = {
       competitions: competitionsCount.count ?? 0,
@@ -938,6 +1025,15 @@ export default function Admin() {
       ).length,
       playedGamesWithoutStats: matchesData.filter((row) => !row.is_forfeit && !playerRowsByMatch.has(Number(row.match_id))).length,
       forfeitGameRows: matchesData.filter((row) => row.is_forfeit).length,
+      phaseMismatches,
+      playoffSeriesMissingLink,
+      duplicateSeries,
+      crossCompetitionLeaks,
+      invalidTopology,
+      conflictingAdvancement,
+      unresolvedIdentity,
+      wrongCompetitionEntry,
+      tierMismatches,
     }
 
     setRebuildHealth({
@@ -959,16 +1055,6 @@ export default function Admin() {
   // ---------------------------------------------------------------------------
 
   useEffect(() => {
-    supabase.auth
-      .getSession()
-      .then(
-        ({ data }) => {
-          if (!data.session || data.session.user.app_metadata?.site_admin !== true) {
-            router.push('/login')
-          }
-        }
-      )
-
     async function loadCompetitions() {
       const {
         data,
@@ -1002,6 +1088,24 @@ export default function Admin() {
 
       const registrations = (teamData ?? []) as TeamRegistration[]
       setTeamRegistrations(registrations)
+      const firstTeam = registrations[0]?.name ?? ''
+      setTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
+      setImportTeam((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
+      setScheduleTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
+
+      const [playoffResult, entryResult] = await Promise.all([
+        supabase
+          .from('playoff_matches')
+          .select('playoff_match_id, bracket_id, round_name, team_a_name, team_b_name, flop_reset_team_a_id, flop_reset_team_b_id, opponent_a_id, opponent_b_id, competition_entry_a_id, competition_entry_b_id, best_of, is_bye, is_forfeit, series_id, playoff_brackets!inner(competition_id, tier, name)')
+          .order('playoff_match_id'),
+        supabase
+          .from('competition_entries')
+          .select('entry_id, competition_id, fr_team_id, opponent_id, display_name_snapshot, tier'),
+      ])
+      if (playoffResult.error) console.error(playoffResult.error)
+      if (entryResult.error) console.error(entryResult.error)
+      setPlayoffImportTargets((playoffResult.data ?? []) as unknown as PlayoffImportTarget[])
+      setCompetitionEntryLinks((entryResult.data ?? []) as CompetitionEntryLink[])
 
       if (list.length) {
         const firstId =
@@ -1026,10 +1130,23 @@ export default function Admin() {
       setPrScopeAvailable(!scopeProbe.error)
     }
 
-    loadCompetitions()
-    loadScheduled()
-    loadManageData()
-    loadRebuildHealth()
+    async function initializeAdmin() {
+      const { data } = await supabase.auth.getSession()
+      if (!data.session || data.session.user.app_metadata?.site_admin !== true) {
+        router.replace('/login')
+        return
+      }
+
+      setAdminReady(true)
+      await Promise.all([
+        loadCompetitions(),
+        loadScheduled(),
+        loadManageData(),
+        loadRebuildHealth(),
+      ])
+    }
+
+    void initializeAdmin()
   }, [router])
 
   useEffect(() => {
@@ -2342,6 +2459,49 @@ export default function Admin() {
         team,
       } = await getImportContext()
 
+      const normalizedOpponent = normalizeOpponentName(importOpponent)
+      const [{ data: opponentRows, error: opponentError }, { data: aliasRows, error: aliasError }] = await Promise.all([
+        supabase.from('opponents').select('opponent_id, canonical_name').eq('normalized_name', normalizedOpponent),
+        supabase.from('opponent_aliases').select('opponent_id, alias').eq('normalized_alias', normalizedOpponent),
+      ])
+      if (opponentError || aliasError) throw opponentError ?? aliasError
+      const opponentIds = [...new Set([
+        ...(opponentRows ?? []).map((row) => Number(row.opponent_id)),
+        ...(aliasRows ?? []).map((row) => Number(row.opponent_id)),
+      ])]
+      if (opponentIds.length !== 1) {
+        throw new Error(opponentIds.length
+          ? 'Opponent identity is ambiguous. Resolve it in League Directory before import.'
+          : 'Opponent identity is unresolved. Resolve it in League Directory before import.')
+      }
+      const opponentId = opponentIds[0]
+
+      const playoffTarget = importSeriesType === 'playoffs'
+        ? playoffImportTargets.find((row) => String(row.playoff_match_id) === importPlayoffMatchId)
+        : null
+      if (importSeriesType === 'playoffs') {
+        if (!playoffTarget) throw new Error('Select a playoff match before importing.')
+        const bracketCompetitionId = Number(playoffTarget.playoff_brackets?.competition_id)
+        if (bracketCompetitionId !== Number(competition.id)) throw new Error('Playoff bracket competition does not match the import competition.')
+        if (playoffTarget.series_id) throw new Error('This playoff match already has a linked series.')
+        if (playoffTarget.is_bye || playoffTarget.is_forfeit) throw new Error('Played-game CSVs cannot be attached to BYE or forfeit bracket results.')
+        const entryA = competitionEntryLinks.find((entry) => entry.entry_id === Number(playoffTarget.competition_entry_a_id))
+        const entryB = competitionEntryLinks.find((entry) => entry.entry_id === Number(playoffTarget.competition_entry_b_id))
+        const sideAFr = Number(playoffTarget.flop_reset_team_a_id ?? entryA?.fr_team_id)
+        const sideBFr = Number(playoffTarget.flop_reset_team_b_id ?? entryB?.fr_team_id)
+        const sideAOpponent = Number(playoffTarget.opponent_a_id ?? entryA?.opponent_id)
+        const sideBOpponent = Number(playoffTarget.opponent_b_id ?? entryB?.opponent_id)
+        const identitiesMatch = (sideAFr === Number(team.id) && sideBOpponent === opponentId) ||
+          (sideBFr === Number(team.id) && sideAOpponent === opponentId)
+        if (!identitiesMatch) throw new Error('Playoff participants do not match the selected Flop Reset team and canonical opponent.')
+        if (playoffTarget.best_of && Number(playoffTarget.best_of) !== intendedBestOf) throw new Error('Best-of value disagrees with the selected playoff match.')
+        const ourWins = games.filter((game) => Number(game.ourGoals) > Number(game.theirGoals)).length
+        const theirWins = games.filter((game) => Number(game.theirGoals) > Number(game.ourGoals)).length
+        if (ourWins === theirWins || Math.max(ourWins, theirWins) <= intendedBestOf / 2) {
+          throw new Error('Imported playoff games do not contain a decisive best-of result.')
+        }
+      }
+
       const replayIds =
         games.map(
           (game) =>
@@ -2389,6 +2549,12 @@ export default function Admin() {
 
           opponent_name:
             importOpponent,
+
+          opponent_id:
+            opponentId,
+
+          competition_phase:
+            importSeriesType,
 
           best_of:
             intendedBestOf,
@@ -2525,6 +2691,31 @@ export default function Admin() {
         setImportMessage(
           `Successfully imported ${games.length} new game(s) and ${playerStats.length} player-stat rows.`
         )
+
+        if (playoffTarget) {
+          const { error: linkError } = await supabase
+            .from('playoff_matches')
+            .update({
+              series_id: series.series_id,
+              status: 'final',
+              score_a: null,
+              score_b: null,
+              winner_side: null,
+              winner_name: null,
+              is_forfeit: false,
+            })
+            .eq('playoff_match_id', playoffTarget.playoff_match_id)
+            .is('series_id', null)
+          if (linkError) throw new Error(`Series imported, but playoff linkage failed: ${linkError.message}`)
+          await supabase.from('admin_audit_log').insert({
+            entity_type: 'playoff_match',
+            entity_id: String(playoffTarget.playoff_match_id),
+            action: 'playoff_import_linked',
+            before_data: playoffTarget,
+            after_data: { series_id: series.series_id, competition_phase: 'playoffs' },
+            reason: 'Canonical Ballchasing playoff import',
+          })
+        }
 
         await loadRebuildHealth()
         clearImportPreview()
@@ -2904,6 +3095,9 @@ export default function Admin() {
           opponent_name:
             opponentName,
 
+          competition_phase:
+            resultPhase,
+
           best_of:
             isForfeit
               ? null
@@ -3211,6 +3405,8 @@ export default function Admin() {
             prFormat,
           competition_id:
             Number(prCompetitionId),
+          competition_phase:
+            prPhase,
           batch_label:
             label,
         })
@@ -3449,6 +3645,13 @@ export default function Admin() {
   const targetRegistration = teamRegistrations.find(
     (team) => team.name === importTeam && team.format === selectedImportCompetition?.format
   )
+  const selectedPlayoffTarget = playoffImportTargets.find(
+    (row) => String(row.playoff_match_id) === importPlayoffMatchId
+  )
+  const compatiblePlayoffTargets = playoffImportTargets.filter((row) =>
+    Number(row.playoff_brackets?.competition_id) === Number(importCompetitionId) &&
+    !row.series_id && !row.is_bye && !row.is_forfeit
+  )
   const previewErrors = games.length ? [
     ...playersSummaryErrors,
     ...importValidation.errors,
@@ -3457,6 +3660,7 @@ export default function Admin() {
     ...(!importOpponent.trim() ? ['Opponent identity is missing.'] : []),
     ...(!importDate ? ['Series date is missing.'] : []),
     ...(!bestOfValid ? ['A valid odd best-of value is required.'] : []),
+    ...(importSeriesType === 'playoffs' && !selectedPlayoffTarget ? ['A playoff match is required for a playoff import.'] : []),
   ] : [...playersSummaryErrors, ...importValidation.errors]
   const safeToImport = games.length > 0 && previewErrors.length === 0 &&
     (importMode === 'new' || importMode === 'backfill')
@@ -3474,8 +3678,17 @@ export default function Admin() {
   // UI
   // ---------------------------------------------------------------------------
 
+  if (!adminReady) {
+    return (
+      <main className="mx-auto w-full max-w-3xl min-w-0 px-4 py-12 md:px-8">
+        <h1 className="text-3xl font-bold">Admin</h1>
+        <p className="mt-4 text-sm text-neutral-500">Verifying administrator access…</p>
+      </main>
+    )
+  }
+
   return (
-    <main className={`mx-auto w-full min-w-0 px-4 py-12 md:px-8 ${tab === 'playoffs' || tab === 'directory' ? 'max-w-7xl' : 'max-w-3xl'}`}>
+    <main className={`mx-auto w-full min-w-0 px-4 py-12 md:px-8 ${tab === 'playoffs' || tab === 'archive' || tab === 'directory' ? 'max-w-7xl' : 'max-w-3xl'}`}>
       <h1 className="text-3xl font-bold mb-6">
         Admin
       </h1>
@@ -3543,6 +3756,13 @@ export default function Admin() {
         </button>
 
         <button
+          onClick={() => setTab('archive')}
+          className={tabClass('archive')}
+        >
+          Archive
+        </button>
+
+        <button
           onClick={() => setTab('directory')}
           className={tabClass('directory')}
         >
@@ -3602,6 +3822,12 @@ export default function Admin() {
               ['Player Row Integrity', rebuildHealth.counts.orphanPlayerRows === 0 && rebuildHealth.counts.wrongPlayerRowGames === 0, `${rebuildHealth.counts.orphanPlayerRows} orphan rows · ${rebuildHealth.counts.wrongPlayerRowGames} games with wrong FR row count`],
               ['Series Coverage', rebuildHealth.counts.seriesWithoutGames === 0 && rebuildHealth.counts.playedGamesWithoutStats === 0, `${rebuildHealth.counts.seriesWithoutGames} unexplained empty series · ${rebuildHealth.counts.playedGamesWithoutStats} played games without stats`],
               ['Forfeit Integrity', rebuildHealth.counts.forfeitGameRows === 0, rebuildHealth.counts.forfeitGameRows === 0 ? 'Zero game rows attached to forfeits' : `${rebuildHealth.counts.forfeitGameRows} legacy forfeit game rows queued for reset`],
+              ['Phase Integrity', rebuildHealth.counts.phaseMismatches === 0 && rebuildHealth.counts.playoffSeriesMissingLink === 0, `${rebuildHealth.counts.phaseMismatches} linked phase mismatches · ${rebuildHealth.counts.playoffSeriesMissingLink} playoff series missing bracket link`],
+              ['Duplicate Series', rebuildHealth.counts.duplicateSeries === 0, `${rebuildHealth.counts.duplicateSeries} duplicate series candidates`],
+              ['Cross-Competition Links', rebuildHealth.counts.crossCompetitionLeaks === 0, `${rebuildHealth.counts.crossCompetitionLeaks} playoff/series competition leaks`],
+              ['Bracket Topology', rebuildHealth.counts.invalidTopology === 0 && rebuildHealth.counts.conflictingAdvancement === 0, `${rebuildHealth.counts.invalidTopology} invalid routes · ${rebuildHealth.counts.conflictingAdvancement} shared destination slots`],
+              ['Competition Entries', rebuildHealth.counts.wrongCompetitionEntry === 0 && rebuildHealth.counts.tierMismatches === 0, `${rebuildHealth.counts.wrongCompetitionEntry} wrong-competition entries · ${rebuildHealth.counts.tierMismatches} tier mismatches`],
+              ['Unresolved Opponent Identity', rebuildHealth.counts.unresolvedIdentity === 0, `${rebuildHealth.counts.unresolvedIdentity} series require canonical opponent review`],
               ['Structural Identity', rebuildHealth.checks.structuralTablesValid, `${rebuildHealth.counts.competitions} competitions · ${rebuildHealth.counts.teams} teams · ${rebuildHealth.counts.players} players`],
               ['Power Dataset', rebuildHealth.counts.leagueMatches === 0, rebuildHealth.counts.leagueMatches === 0 ? 'REBUILDING' : `${rebuildHealth.counts.leagueMatches} rows queued for reset`],
             ].map(([label, healthy, detail]) => <div key={String(label)} className="rounded-xl border border-neutral-800 bg-neutral-950/50 p-4"><div className="flex items-center justify-between gap-3"><span className="font-bold text-white">{label}</span><span className={`text-xs font-black ${healthy ? 'text-emerald-400' : 'text-amber-300'}`}>{healthy ? '✓' : 'REVIEW'}</span></div><div className="mt-2 text-xs text-neutral-500">{detail}</div></div>)}
@@ -3667,10 +3893,18 @@ export default function Admin() {
               }
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
             >
-              <option value="Frameshift">Frameshift</option>
-              <option value="Frantic">Frantic</option>
-              <option value="Fracture">Fracture</option>
+              {[...new Set(teamRegistrations.filter((team) => team.format === competitions.find((competition) => String(competition.id) === competitionId)?.format).map((team) => team.name))].map((team) => <option key={team} value={team}>{team}</option>)}
             </select>
+          </label>
+
+          <label>
+            Competition Phase:
+            <select value={resultPhase} onChange={(event) => setResultPhase(event.target.value as CompetitionPhase)} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full">
+              <option value="regular_season">Regular Season</option>
+              <option value="qualifier">Qualifier</option>
+              <option value="exhibition">Exhibition</option>
+            </select>
+            <span className="mt-1 block text-xs text-neutral-500">Use Playoff Admin or the playoff CSV workflow for postseason results so a bracket link is required.</span>
           </label>
 
           <label>
@@ -3924,6 +4158,28 @@ export default function Admin() {
             <span className="mt-2 block text-xs text-neutral-500">Canonical per-game write source. Supplies replay IDs and exact player-game destinations.</span>
           </label>
 
+          <fieldset className="mb-5 rounded-xl border border-neutral-800 p-4">
+            <legend className="px-2 text-sm font-black text-white">Series Type</legend>
+            <div className="grid grid-cols-2 gap-2">
+              {(['regular_season', 'playoffs'] as const).map((phase) => (
+                <button key={phase} type="button" onClick={() => { setImportSeriesType(phase); setImportPlayoffMatchId(''); clearImportPreview() }} className={`rounded-lg border px-3 py-3 text-sm font-black ${importSeriesType === phase ? 'border-[#FF00A6] bg-[#FF00A6]/15 text-white' : 'border-neutral-800 text-neutral-500'}`}>
+                  {phase === 'regular_season' ? 'Regular Season' : 'Playoffs'}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+
+          {importSeriesType === 'playoffs' && <label className="block mb-5">
+            Playoff Match:
+            <select value={importPlayoffMatchId} onChange={(event) => { setImportPlayoffMatchId(event.target.value); clearImportPreview() }} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full">
+              <option value="">Select verified bracket match</option>
+              {compatiblePlayoffTargets.map((row) => <option key={row.playoff_match_id} value={row.playoff_match_id}>
+                {row.playoff_brackets?.tier ?? 'Tier ?'} · {row.round_name ?? 'Round TBD'} · {row.team_a_name || 'TBD'} vs {row.team_b_name || 'TBD'}
+              </option>)}
+            </select>
+            <span className="mt-1 block text-xs text-neutral-500">Only unlinked, played-result slots from the selected competition are eligible.</span>
+          </label>}
+
           <label className="block mb-6">
             Optional — matching Ballchasing players.csv validator:
             <input
@@ -3973,6 +4229,8 @@ export default function Admin() {
                 <dl className="mt-4 grid gap-3 text-sm sm:grid-cols-2">
                   <div><dt className="text-neutral-500">Competition</dt><dd className="font-semibold text-white">{selectedImportCompetition ? formatCompetitionAdminLabel(selectedImportCompetition) : '—'}</dd></div>
                   <div><dt className="text-neutral-500">Format</dt><dd className="font-semibold text-white">{selectedImportCompetition?.format ?? '—'}</dd></div>
+                  <div><dt className="text-neutral-500">Phase</dt><dd className="font-semibold text-white">{importSeriesType === 'playoffs' ? 'Playoffs' : 'Regular Season'}</dd></div>
+                  {importSeriesType === 'playoffs' && <div><dt className="text-neutral-500">Bracket Match</dt><dd className="font-semibold text-white">{selectedPlayoffTarget ? `${selectedPlayoffTarget.playoff_brackets?.tier ?? 'Tier ?'} · ${selectedPlayoffTarget.round_name}` : '—'}</dd></div>}
                   <div><dt className="text-neutral-500">Team</dt><dd className="font-semibold text-white">{importTeam}</dd></div>
                   <div><dt className="text-neutral-500">Opponent</dt><dd className="font-semibold text-white">{importOpponent || '—'}</dd></div>
                   <div><dt className="text-neutral-500">Date</dt><dd className="font-semibold text-white">{importDate ? formatPublicDate(importDate) : '—'}</dd></div>
@@ -4275,15 +4533,7 @@ export default function Admin() {
                 }
                 className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
               >
-                <option value="Frameshift">
-                  Frameshift
-                </option>
-                <option value="Frantic">
-                  Frantic
-                </option>
-                <option value="Fracture">
-                  Fracture
-                </option>
+                {[...new Set(teamRegistrations.filter((team) => team.format === competitions.find((competition) => String(competition.id) === scheduleCompetitionId)?.format).map((team) => team.name))].map((team) => <option key={team} value={team}>{team}</option>)}
               </select>
             </label>
 
@@ -4494,6 +4744,15 @@ export default function Admin() {
             />
           </label>
 
+          <label className="block mb-4">
+            Competition phase:
+            <select value={prPhase} onChange={(event) => setPrPhase(event.target.value as CompetitionPhase)} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2">
+              <option value="regular_season">Regular Season</option>
+              <option value="playoffs">Playoffs</option>
+              <option value="qualifier">Qualifier</option>
+            </select>
+          </label>
+
           <button
             onClick={
               handlePrParse
@@ -4571,6 +4830,7 @@ export default function Admin() {
       {/* PLAYOFFS */}
 
       {tab === 'playoffs' && <PlayoffAdminEditor />}
+      {tab === 'archive' && <SeasonArchiveAdmin />}
       {tab === 'directory' && <LeagueDirectoryAdmin />}
 
       {/* MANAGE */}

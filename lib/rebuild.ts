@@ -67,7 +67,7 @@ export function simulateCompetitiveReset(fixture: ResetFixture) {
     ? {
         ...row,
         series_id: null,
-        status: row.status === 'completed' ? 'pending' : row.status,
+        status: row.status === 'final' ? 'tbd' : row.status,
         score_a: null,
         score_b: null,
         slot1_score: null,

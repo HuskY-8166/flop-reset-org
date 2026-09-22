@@ -1,38 +1,53 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import { calculateEloWithHistory } from '@/lib/elo'
 import { EmptyState, EntityBadge, FormIndicator, PageHero, SeriesResultBadge, SectionHeader, StatCard } from '@/components/ui'
 import { formatPublicDate, getPerformanceScore, getSeriesOutcome } from '@/lib/results'
+import { brandingForTeam } from '@/lib/teamBranding'
+import { phaseIsPowerEvidence } from '@/lib/competitionPhase'
+import { parseTeamId } from '@/lib/teamRoutes'
 export const dynamic='force-dynamic'
-const colors:Record<string,string>={Fracture:'#E4A0F7',Frantic:'#AF69EE',Frameshift:'#8F00FF'}
 
-export async function generateMetadata({params}:{params:Promise<{name:string}>}):Promise<Metadata>{const{name}=await params,team=decodeURIComponent(name);return{title:`${team} — Flop Reset Rocket League`,description:`Roster, results, stats, and history for Flop Reset ${team}.`}}
+export async function generateMetadata({params}:{params:Promise<{name:string}>}):Promise<Metadata>{const{name}=await params,teamId=parseTeamId(decodeURIComponent(name));if(!teamId)return{title:'Team Not Found — Flop Reset'};const{data:team}=await supabase.from('teams').select('display_name, name, format').eq('id',teamId).maybeSingle();const label=team?.display_name??team?.name??'Team';return{title:`${label} — Flop Reset Rocket League`,description:`Roster, results, stats, and history for Flop Reset ${label}${team?.format?` (${team.format})`:''}.`}}
 
 export default async function TeamPage({params}:{params:Promise<{name:string}>}){
-  const{name}=await params,teamName=decodeURIComponent(name)
-  const{data:teamRows}=await supabase.from('teams').select('id, name, format, captain, players ( player_id, name, aliases, status, retired_at )').eq('name',teamName)
-  if(!teamRows?.length)return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="Team not found" description="This squad is not registered in the Flop Reset archive." actionHref="/teams" actionLabel="View teams"/></main>
+  const{name}=await params,teamId=parseTeamId(decodeURIComponent(name))
+  if(!teamId)notFound()
+  const{data:team}=await supabase.from('teams').select('id, name, format, captain, display_name, short_name, slug, primary_color, secondary_color, logo_url, wordmark_style, active, brand_metadata, players ( player_id, name, aliases, status, retired_at )').eq('id',teamId).maybeSingle()
+  if(!team)notFound()
+  const teamRows=[team],teamName=team.name
   const teamIds=teamRows.map((t)=>t.id)
-  const[{data:series},{data:scheduled},{data:stats},{data:competitions},{data:leagueMatches}]=await Promise.all([
-    supabase.from('series').select('series_id, competition_id, opponent_name, series_date, notes, teams ( name, format ), matches ( * )').in('flop_reset_team_id',teamIds).order('series_date',{ascending:false}),
+  const[{data:series},{data:scheduled},{data:stats},{data:competitions},{data:leagueMatches},{data:competitionEntries}]=await Promise.all([
+    supabase.from('series').select('series_id, competition_id, competition_phase, flop_reset_team_id, opponent_name, series_date, notes, teams ( name, format ), matches ( * )').in('flop_reset_team_id',teamIds).order('series_date',{ascending:false}),
     supabase.from('scheduled_matches').select('scheduled_id, competition_id, opponent_name, match_date, match_time, teams ( name, format )').in('flop_reset_team_id',teamIds).eq('status','scheduled').order('match_date'),
     supabase.from('match_player_stats').select('player_id, goals, assists, saves, shots, score, mvp, players ( name ), matches!inner ( flop_reset_team_id, is_forfeit )').in('matches.flop_reset_team_id',teamIds),
-    supabase.from('competitions').select('id, name, format'),
-    supabase.from('league_matches').select('round, tier, team_a, team_b, score_a, score_b, status, match_date, format').in('format',teamRows.map((t)=>t.format)),
+    supabase.from('competitions').select('id, name, format, status, start_date'),
+    supabase.from('league_matches').select('competition_id, competition_phase, round, tier, team_a, team_b, score_a, score_b, status, match_date, format').in('format',teamRows.map((t)=>t.format)),
+    supabase.from('public_competition_entries').select('competition_id, fr_team_id, display_name_snapshot, tier').in('fr_team_id',teamIds),
   ])
-  const compById=new Map((competitions??[]).map((c:any)=>[c.id,c])),accent=colors[teamName]??'#AF69EE'
+  const compById=new Map((competitions??[]).map((c:any)=>[c.id,c])),brand=brandingForTeam(teamRows[0]),accent=brand.secondaryColor
   let seriesWins=0,seriesLosses=0,gameWins=0,gameLosses=0,goalsFor=0,goalsAgainst=0,performanceGames=0
   ;(series??[]).forEach((s:any)=>{const outcome=getSeriesOutcome(s.matches??[],s);gameWins+=outcome.wins;gameLosses+=outcome.losses;if(outcome.won)seriesWins++;else if(outcome.lost)seriesLosses++;for(const game of s.matches??[]){const score=getPerformanceScore(game);if(score){goalsFor+=score.for;goalsAgainst+=score.against;performanceGames++}}})
   const roster=new Map<string,any>();teamRows.flatMap((t:any)=>t.players??[]).filter((p:any)=>!p.status||p.status==='active').forEach((p:any)=>roster.set(p.name,{...p,formats:teamRows.filter((t:any)=>(t.players??[]).some((x:any)=>x.name===p.name&&(!x.status||x.status==='active'))).map((t)=>t.format)}))
   const playerTotals=new Map<string,any>();(stats??[]).filter((s:any)=>!s.matches?.is_forfeit).forEach((s:any)=>{const name=s.players?.name;if(!name)return;const r=playerTotals.get(name)??{name,games:0,goals:0,assists:0,saves:0,shots:0,score:0,mvps:0};r.games++;r.goals+=Number(s.goals??0);r.assists+=Number(s.assists??0);r.saves+=Number(s.saves??0);r.shots+=Number(s.shots??0);r.score+=Number(s.score??0);r.mvps+=s.mvp?1:0;playerTotals.set(name,r)})
   const leaders=[...playerTotals.values()]
   const leaderDefs=[['Goals','goals'],['Assists','assists'],['Saves','saves'],['Shots','shots'],['Score / Game','scoreRate'],['Shooting %','shooting']] as const
-  const power=teamRows.map((row)=>{const data=calculateEloWithHistory((leagueMatches??[]).filter((m:any)=>m.format===row.format) as any);return data.teamSummaries.find((t)=>t.team.toLowerCase().includes(teamName.toLowerCase()))}).find(Boolean)
+  const power=teamRows.map((row)=>{
+    const rowSeries=(series??[]).filter((item:any)=>Number(item.flop_reset_team_id)===Number(row.id)&&item.teams?.format===row.format)
+    const candidateIds=[...new Set(rowSeries.map((item:any)=>Number(item.competition_id)).filter(Number.isFinite))]
+    const selectedCompetition=(competitions??[]).find((item:any)=>candidateIds.includes(Number(item.id))&&item.status==='active')??(competitions??[]).find((item:any)=>candidateIds.includes(Number(item.id)))
+    if(!selectedCompetition)return null
+    const entry=(competitionEntries??[]).find((item:any)=>Number(item.competition_id)===Number(selectedCompetition.id)&&Number(item.fr_team_id)===Number(row.id))
+    if(!entry)return null
+    const data=calculateEloWithHistory((leagueMatches??[]).filter((match:any)=>Number(match.competition_id)===Number(selectedCompetition.id)&&match.format===row.format&&phaseIsPowerEvidence(match.competition_phase)) as any)
+    return data.teamSummaries.find((summary)=>summary.team===entry.display_name_snapshot)??null
+  }).find(Boolean)
   const form=(series??[]).slice(0,5).map((s:any)=>{const outcome=getSeriesOutcome(s.matches??[],s);return{id:s.series_id,won:outcome.won,href:`/matches/${s.series_id}`}})
   const entered=[...new Set((series??[]).map((s:any)=>s.competition_id).filter(Boolean))].map((id)=>compById.get(id)).filter(Boolean)
-  return <main className="mx-auto max-w-7xl px-4 py-10 md:px-8 md:py-14"><PageHero eyebrow={`Flop Reset · ${teamRows.map((t)=>t.format).join(' / ')}`} title={teamName} description="Team hub for the current roster, competitive form, leaders, schedule, results, and preserved archive context." accent={accent}><div className="grid grid-cols-2 gap-3 md:grid-cols-5"><StatCard label="Series Record" value={`${seriesWins}–${seriesLosses}`} accent/><StatCard label="Game Record" value={`${gameWins}–${gameLosses}`}/><StatCard label="Goals / Performance Game" value={performanceGames?(goalsFor/performanceGames).toFixed(2):'—'} detail="Forfeits excluded"/><StatCard label="Allowed / Performance Game" value={performanceGames?(goalsAgainst/performanceGames).toFixed(2):'—'} detail="Forfeits excluded"/><StatCard label="Power" value={power?`#${power.overallRank}`:'—'} detail={power?`${Math.round(power.rating)} Elo · ${power.tier}`:'No rating yet'}/></div></PageHero>
+  return <main className="mx-auto min-w-0 max-w-7xl px-4 py-10 md:px-8 md:py-14"><PageHero eyebrow={`Flop Reset · ${teamRows.map((t)=>t.format).join(' / ')}`} title={brand.name} description="Team hub for the current roster, competitive form, leaders, schedule, results, and preserved archive context." accent={accent}><div className="grid min-w-0 grid-cols-[repeat(2,minmax(0,1fr))] gap-3 md:grid-cols-5 [&>*]:min-w-0"><StatCard label="Series Record" value={`${seriesWins}–${seriesLosses}`} accent/><StatCard label="Game Record" value={`${gameWins}–${gameLosses}`}/><StatCard label="Goals / Performance Game" value={performanceGames?(goalsFor/performanceGames).toFixed(2):'—'} detail="Forfeits excluded"/><StatCard label="Allowed / Performance Game" value={performanceGames?(goalsAgainst/performanceGames).toFixed(2):'—'} detail="Forfeits excluded"/><StatCard label="Power" value={power?`#${power.overallRank}`:'—'} detail={power?`${Math.round(power.rating)} Elo · ${power.tier}`:'No rating yet'}/></div></PageHero>
     <nav className="sticky top-14 z-20 my-8 overflow-x-auto rounded-xl border border-neutral-800 bg-[#0d0d0d]/95 px-4 py-3"><div className="flex min-w-max gap-5 text-xs font-bold uppercase tracking-wide text-neutral-500">{[['roster','Roster'],['leaders','Leaders'],['form','Form'],['schedule','Schedule'],['results','Results'],['history','History']].map(([id,label])=><a key={id} href={`#${id}`} className="hover:text-purple-300">{label}</a>)}</div></nav>
     <section id="roster" className="scroll-mt-28"><SectionHeader eyebrow="Current registration" title="Roster" description="Aliases are shown for import identity continuity; dated roster membership requires the future history model."/><div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[...roster.values()].map((p:any)=>{const t=playerTotals.get(p.name);return <Link key={p.name} href={`/players/${encodeURIComponent(p.name)}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:-translate-y-0.5 hover:border-purple-800"><div className="flex items-start justify-between"><div><h3 className="text-2xl font-black">{p.name}</h3><div className="mt-1 flex flex-wrap gap-1">{p.formats.map((f:string)=><EntityBadge key={f}>{f}</EntityBadge>)}</div></div><div className="text-right"><div className="text-2xl font-black text-purple-300">{t?.games??0}</div><div className="text-[10px] uppercase text-neutral-600">Games</div></div></div>{p.aliases?.length>0&&<div className="mt-4 text-xs text-neutral-600">Previously / aliases: {p.aliases.join(', ')}</div>}{t&&<div className="mt-4 grid grid-cols-4 gap-2 text-center text-sm"><div><b>{t.goals}</b><small className="block text-neutral-600">G</small></div><div><b>{t.assists}</b><small className="block text-neutral-600">A</small></div><div><b>{t.saves}</b><small className="block text-neutral-600">SV</small></div><div><b>{t.shots}</b><small className="block text-neutral-600">SH</small></div></div>}</Link>})}</div></section>
     <section id="leaders" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Team performance" title="Team Leaders"/><div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{leaderDefs.map(([label,key])=>{const value=(p:any)=>key==='scoreRate'?p.score/p.games:key==='shooting'?(p.shots?p.goals/p.shots*100:0):p[key],best=[...leaders].filter((p)=>value(p)>0).sort((a,b)=>value(b)-value(a))[0];return <article key={key} className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs font-bold uppercase text-neutral-500">{label}</div><div className="mt-2 text-3xl font-black text-purple-300">{best?(key==='shooting'?`${value(best).toFixed(1)}%`:key==='scoreRate'?value(best).toFixed(0):value(best)):'—'}</div>{best&&<Link href={`/players/${encodeURIComponent(best.name)}`} className="mt-2 inline-block font-bold text-white hover:underline">{best.name}</Link>}</article>})}</div></section>

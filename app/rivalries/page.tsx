@@ -5,6 +5,7 @@ import { formatPublicDate, getSeriesOutcome } from '@/lib/results'
 import { normalizeIdentity } from '@/lib/stats'
 import { supabase } from '@/lib/supabase'
 import { buildOpponentIdentityIndex } from '@/lib/opponents'
+import { teamSlug } from '@/lib/teamBranding'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,6 +21,7 @@ type Rivalry = {
   latestId: number
   latestDate: string
   formats: Set<string>
+  opponentId: number | null
 }
 
 export default async function Rivalries({ searchParams }: { searchParams: Promise<{ format?: string }> }) {
@@ -53,6 +55,7 @@ export default async function Rivalries({ searchParams }: { searchParams: Promis
       latestId: series.series_id,
       latestDate: series.series_date ?? '',
       formats: new Set<string>(),
+      opponentId: identity?.opponentId ?? null,
     }
 
     row.aliases.add(series.opponent_name ?? opponent)
@@ -76,7 +79,7 @@ export default async function Rivalries({ searchParams }: { searchParams: Promis
       </nav>
       {error ? <div className="rounded-xl border border-red-900 bg-red-950/20 p-4 text-red-300">Something went wrong while loading rivalry history. Please try again shortly.</div> : null}
       {!error && !rivalries.length ? <EmptyState title="No opponent history recorded" description={`No ${selected === 'All' ? '' : `${selected} `}rivalry data is available yet.`} /> : null}
-      {rivalries.length ? <section><SectionHeader eyebrow="Global opponent identities" title="Opponent Ledger" /><div className="grid gap-4 md:grid-cols-2">{rivalries.map((row) => <Link key={row.key} href={`/rivalries/${encodeURIComponent(row.opponent)}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-black">{row.opponent}</h2><div className="mt-1 text-xs text-neutral-500">Last met {formatPublicDate(row.latestDate)} · {[...row.formats].join(' / ')}</div>{row.aliases.size > 1 ? <div className="mt-2 text-xs text-neutral-600">Recorded names: {[...row.aliases].join(', ')}</div> : null}</div><div className="rounded-lg border border-neutral-800 bg-black/20 px-3 py-2 text-center"><div className="text-xl font-black text-purple-300">{row.series}</div><div className="text-[10px] uppercase text-neutral-600">Series</div></div></div><div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-xl border border-neutral-800 p-3"><div className="text-xs uppercase text-neutral-600">Series Record</div><div className="mt-1 text-xl font-bold">{row.seriesWins}–{row.seriesLosses}</div></div><div className="rounded-xl border border-neutral-800 p-3"><div className="text-xs uppercase text-neutral-600">Game Record</div><div className="mt-1 text-xl font-bold">{row.gameWins}–{row.gameLosses}</div></div></div><div className="mt-4 text-sm text-purple-300">Open rivalry archive →</div></Link>)}</div></section> : null}
+      {rivalries.length ? <section><SectionHeader eyebrow="Global opponent identities" title="Opponent Ledger" /><div className="grid gap-4 md:grid-cols-2">{rivalries.map((row) => <Link key={row.key} href={row.opponentId ? `/rivalries/${row.opponentId}/${teamSlug(row.opponent)}` : `/rivalries/${encodeURIComponent(row.opponent)}`} className="rounded-2xl border border-neutral-800 bg-[#111] p-5 text-white no-underline hover:border-purple-800"><div className="flex items-start justify-between gap-4"><div><h2 className="text-2xl font-black">{row.opponent}</h2><div className="mt-1 text-xs text-neutral-500">Last met {formatPublicDate(row.latestDate)} · {[...row.formats].join(' / ')}</div>{row.aliases.size > 1 ? <div className="mt-2 text-xs text-neutral-600">Recorded names: {[...row.aliases].join(', ')}</div> : null}</div><div className="rounded-lg border border-neutral-800 bg-black/20 px-3 py-2 text-center"><div className="text-xl font-black text-purple-300">{row.series}</div><div className="text-[10px] uppercase text-neutral-600">Series</div></div></div><div className="mt-5 grid grid-cols-2 gap-3"><div className="rounded-xl border border-neutral-800 p-3"><div className="text-xs uppercase text-neutral-600">Series Record</div><div className="mt-1 text-xl font-bold">{row.seriesWins}–{row.seriesLosses}</div></div><div className="rounded-xl border border-neutral-800 p-3"><div className="text-xs uppercase text-neutral-600">Game Record</div><div className="mt-1 text-xl font-bold">{row.gameWins}–{row.gameLosses}</div></div></div><div className="mt-4 text-sm text-purple-300">Open rivalry archive →</div></Link>)}</div></section> : null}
     </main>
   )
 }

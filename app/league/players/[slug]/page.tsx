@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { EmptyState, PageHero, SectionHeader } from '@/components/ui'
 import { competitionIdentity } from '@/lib/competitions'
 import { supabase } from '@/lib/supabase'
@@ -22,7 +23,7 @@ export default async function LeaguePlayerPage({ params }: { params: Promise<{ s
     supabase.from('public_league_players').select('*').eq('slug', slug).maybeSingle(),
     supabase.from('public_page_content_overrides').select('*').eq('page_key', `league-player:${slug}`).maybeSingle(),
   ])
-  if (!player) return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="League player not found" description="A soft player page is created only when a stable league identity exists." actionHref="/search" actionLabel="Search" /></main>
+  if (!player) notFound()
   if (pageOverride?.is_visible === false) return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="League player page unavailable" description="This page is currently hidden by an administrator." actionHref="/search" actionLabel="Search" /></main>
   const { data: memberships } = await supabase.from('public_competition_roster_members').select('*').eq('league_player_id', player.league_player_id).order('created_at', { ascending: false })
   const rows = (memberships ?? []) as any[]

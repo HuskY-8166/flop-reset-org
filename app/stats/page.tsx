@@ -16,6 +16,8 @@ import {
   formatRateStat,
   calculateMedalTable,
 } from '@/lib/processSkills'
+import { phaseLabel, phaseMatchesFilter, type CompetitivePhaseFilter } from '@/lib/competitionPhase'
+import { fetchAllPages } from '@/lib/paginatedQuery'
 
 type Row = ProcessPlayer & {
   score: number
@@ -69,6 +71,11 @@ type TrackingSample = {
   zeroBoost: boolean
 }
 
+type CompetitionOption = {
+  id: number
+  name: string
+}
+
 type SortKey =
   | 'name'
   | 'team'
@@ -105,6 +112,9 @@ export default function Stats() {
   const [search, setSearch] = useState('')
   const [teamFilter, setTeamFilter] = useState('All')
   const [formatFilter, setFormatFilter] = useState('All')
+  const [competitionFilter, setCompetitionFilter] = useState('All')
+  const [phaseFilter, setPhaseFilter] = useState<CompetitivePhaseFilter>('all')
+  const [competitionOptions, setCompetitionOptions] = useState<CompetitionOption[]>([])
 
   const [sortKey, setSortKey] = useState<SortKey>('goals')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
@@ -116,7 +126,9 @@ export default function Stats() {
       setLoading(true)
       setLoadError('')
 
-      const { data: full, error } = await supabase
+      let full: any[]
+      try {
+        full = await fetchAllPages((from, to) => supabase
         .from('match_player_stats')
         .select(`
           player_id,
@@ -168,18 +180,39 @@ export default function Stats() {
             teams (
               name,
               format
+            ),
+            series (
+              competition_id,
+              competition_phase,
+              competitions (
+                name
+              )
             )
           )
-        `)
-
-      if (error) {
+        `).range(from, to))
+      } catch (error) {
         console.error(error)
         setLoadError('Something went wrong while loading player statistics. Please try again shortly.')
         setLoading(false)
         return
       }
 
-      setTrackingSamples((full ?? [])
+      const allRows = full ?? []
+      const optionMap = new Map<number, string>()
+      for (const stat of allRows as any[]) {
+        const series = stat.matches?.series
+        const id = Number(series?.competition_id)
+        if (Number.isFinite(id) && series?.competitions?.name) optionMap.set(id, String(series.competitions.name))
+      }
+      setCompetitionOptions([...optionMap].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name)))
+
+      const scopedFull = allRows.filter((stat: any) => {
+        const series = stat.matches?.series
+        const competitionMatches = competitionFilter === 'All' || String(series?.competition_id) === competitionFilter
+        return competitionMatches && phaseMatchesFilter(series?.competition_phase, phaseFilter)
+      })
+
+      setTrackingSamples(scopedFull
         .filter((stat: any) => !stat.matches?.is_forfeit)
         .map((stat: any) => ({
           team: stat.matches?.teams?.name ?? 'Unknown',
@@ -192,7 +225,7 @@ export default function Stats() {
 
       const byPlayer: Record<string, AggregateRow> = {}
 
-      full?.forEach((stat: any) => {
+      scopedFull.forEach((stat: any) => {
         const pid = Number(stat.player_id)
         const historicalTeam = stat.matches?.teams
 
@@ -641,7 +674,7 @@ export default function Stats() {
     }
 
     load()
-  }, [])
+  }, [competitionFilter, phaseFilter])
 
   // ---------------------------------------------------------------------------
   // Team / format filter lists
@@ -1131,6 +1164,15 @@ export default function Stats() {
         />
 
         <select
+          value={competitionFilter}
+          onChange={(event) => setCompetitionFilter(event.target.value)}
+          className="min-w-0 max-w-full bg-[#1b1b1b] border border-neutral-800 rounded-lg px-4 py-2 text-sm text-white"
+        >
+          <option value="All">All Competitions</option>
+          {competitionOptions.map((competition) => <option key={competition.id} value={competition.id}>{competition.name}</option>)}
+        </select>
+
+        <select
           value={teamFilter}
           onChange={(e) =>
             setTeamFilter(
@@ -1152,6 +1194,14 @@ export default function Stats() {
               </option>
             )
           )}
+        </select>
+
+        <select
+          value={phaseFilter}
+          onChange={(event) => setPhaseFilter(event.target.value as CompetitivePhaseFilter)}
+          className="min-w-0 bg-[#1b1b1b] border border-neutral-800 rounded-lg px-4 py-2 text-sm text-white"
+        >
+          {(['all', 'regular_season', 'playoffs'] as const).map((phase) => <option key={phase} value={phase}>{phaseLabel(phase)}</option>)}
         </select>
 
         <select
@@ -1389,21 +1439,21 @@ export default function Stats() {
                       </td>
 
                       <td className="px-4 py-3">
-                        {Math.round(
+                        {row.dataAvailability?.bpm ? Math.round(
                           row.bpm
-                        )}
+                        ) : '—'}
                       </td>
 
                       <td className="px-4 py-3">
-                        {Math.round(
+                        {row.dataAvailability?.avgSpeed ? Math.round(
                           row.avgSpeed
-                        )}
+                        ) : '—'}
                       </td>
 
                       <td className="px-4 py-3">
-                        {row.demoRatio.toFixed(
+                        {row.dataAvailability?.demoEfficiency ? row.demoRatio.toFixed(
                           2
-                        )}
+                        ) : '—'}
                       </td>
                     </tr>
                   )

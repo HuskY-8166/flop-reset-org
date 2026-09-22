@@ -5,6 +5,7 @@ import { supabase } from '@/lib/supabase'
 import { competitionIdentity } from '@/lib/competitions'
 import { calculateEloWithHistory, RATING_MODEL_VERSION, type LeagueMatch } from '@/lib/elo'
 import { PowerHistoryChart } from '@/components/PowerHistoryChart'
+import { phaseIsPowerEvidence } from '@/lib/competitionPhase'
 
 export const dynamic = 'force-dynamic'
 
@@ -20,18 +21,13 @@ export default async function TeamPowerProfile({ params, searchParams }: {
   const { data: competitions = [] } = await supabase.from('competitions').select('*').order('start_date', { ascending: false })
   const compatible = (competitions ?? []).filter((competition: any) => competition.format === format)
   const competition = compatible.find((item: any) => String(item.id) === filters.competition) ?? compatible.find((item: any) => item.status === 'active') ?? compatible[0] ?? null
-  const scopeProbe = await supabase.from('league_matches').select('competition_id').limit(1)
-  const competitionScoped = !scopeProbe.error
-  let matchResult: { data: any[] | null }
-  if (competitionScoped) {
-    let query: any = supabase.from('league_matches').select('id, competition_id, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label').eq('format', format)
-    if (competition) query = query.eq('competition_id', competition.id)
-    matchResult = await query
-  } else {
-    matchResult = await supabase.from('league_matches').select('id, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label').eq('format', format) as any
-  }
+  if (!competition) notFound()
+  const matchResult = await supabase.from('league_matches')
+    .select('id, competition_id, competition_phase, format, round, tier, team_a, team_b, score_a, score_b, status, match_date, batch_label')
+    .eq('format', format)
+    .eq('competition_id', competition.id)
   const { data: rawMatches } = matchResult
-  const matches = (rawMatches ?? []) as LeagueMatch[]
+  const matches = ((rawMatches ?? []) as LeagueMatch[]).filter((match) => phaseIsPowerEvidence(match.competition_phase))
   const requestedRound = Number.parseInt(filters.round ?? '', 10)
   const scopedMatches = Number.isFinite(requestedRound) ? matches.filter((match) => (Number.parseInt(match.round.replace(/\D/g, ''), 10) || 0) <= requestedRound) : matches
   const engine = calculateEloWithHistory(scopedMatches)
@@ -44,7 +40,7 @@ export default async function TeamPowerProfile({ params, searchParams }: {
 
   return <main className="mx-auto max-w-6xl px-4 py-10 md:px-8 md:py-14">
     <Link href={`/power-rankings?${backQuery}`} className="text-sm font-semibold text-purple-300 hover:underline">← Back to Power Rankings</Link>
-    <header className="mt-5 rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9"><div className="text-xs font-black uppercase tracking-[.22em] text-purple-400">Team Power Profile</div><h1 className="mt-2 text-4xl font-black md:text-6xl">{teamName}</h1><p className="mt-3 text-neutral-400">{identity ? `${identity.league} · ${identity.seasonLabel}` : 'Summer Circuit archive'} · {format} · model {RATING_MODEL_VERSION}</p>{!competitionScoped && <p className="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/20 p-3 text-sm text-amber-200">This profile currently covers Summer Circuit results only. Future circuits will remain separate.</p>}</header>
+    <header className="mt-5 rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9"><div className="text-xs font-black uppercase tracking-[.22em] text-purple-400">Team Power Profile</div><h1 className="mt-2 text-4xl font-black md:text-6xl">{teamName}</h1><p className="mt-3 text-neutral-400">{identity ? `${identity.league} · ${identity.seasonLabel}` : 'Competition'} · {format} · model {RATING_MODEL_VERSION}</p></header>
 
     <section className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4"><Stat label="Current Rating" value={Math.round(summary.rating)} /><Stat label="Overall Rank" value={`#${summary.overallRank}`} /><Stat label="Tier Rank" value={`#${summary.tierRank} / ${summary.tier}`} /><Stat label="Sample" value={summary.confidence} /><Stat label="Peak / Low" value={`${Math.round(summary.peak)} / ${Math.round(summary.worst)}`} /><Stat label="Last Round" value={signed(summary.lastRoundDelta)} /><Stat label="Last 3 Rounds" value={signed(summary.threeRoundDelta)} /><Stat label="Last 5 Rounds" value={signed(summary.fiveRoundDelta)} /></section>
 

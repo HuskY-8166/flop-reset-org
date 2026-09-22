@@ -6,9 +6,21 @@ import {
   getPlayoffRoundOrder,
   getPlayoffTierNumber,
   participantDestinationPatch,
+  advancementDecision,
+  resultCorrectionConflict,
   validatePlayoffMatch,
+  validatePlayoffTopology,
+  winnerSideFromDb,
+  winnerSideToDb,
   type EditablePlayoffMatch,
 } from '../lib/playoffAdmin.ts'
+
+assert.equal(winnerSideFromDb(1), 'a')
+assert.equal(winnerSideFromDb(2), 'b')
+assert.equal(winnerSideFromDb(null), null)
+assert.equal(winnerSideToDb('a'), 1)
+assert.equal(winnerSideToDb('b'), 2)
+assert.equal(winnerSideToDb(null), null)
 
 assert.equal(getPlayoffRoundOrder('Opening Round'), 1)
 assert.equal(getPlayoffRoundOrder('Quarterfinal'), 2)
@@ -47,7 +59,7 @@ const base: EditablePlayoffMatch = {
   scoreB: 1,
   bestOf: 5,
   scheduledAt: '2026-08-29T20:00',
-  status: 'completed',
+  status: 'final',
   winnerSide: 'a',
   isBye: false,
   isForfeit: false,
@@ -61,6 +73,7 @@ const base: EditablePlayoffMatch = {
 }
 
 assert.deepEqual(validatePlayoffMatch(base), [])
+assert.match(validatePlayoffMatch({ ...base, status: 'completed' as unknown as EditablePlayoffMatch['status'] }).join(' '), /valid playoff match status/)
 assert.equal(advancingParticipant(base, 'winner')?.snapshot, 'Flop Reset | Fracture')
 assert.equal(advancingParticipant(base, 'loser')?.snapshot, 'NBDA Neon')
 assert.deepEqual(participantDestinationPatch(base.participantA, 2), {
@@ -105,5 +118,35 @@ const forfeit = {
   isForfeit: true,
 }
 assert.deepEqual(validatePlayoffMatch(forfeit), [])
+
+const forfeitVsTbd = { ...forfeit, participantB: { kind: 'tbd' as const, identityId: null, snapshot: '' } }
+assert.ok(validatePlayoffMatch(forfeitVsTbd).some((error) => error.includes('two known participants')))
+
+const finalWithoutScores = { ...base, scoreA: null, scoreB: null }
+assert.ok(validatePlayoffMatch(finalWithoutScores).some((error) => error.includes('both scores')))
+
+const finalVsTbd = { ...finalWithoutScores, participantB: { kind: 'tbd' as const, identityId: null, snapshot: '' } }
+assert.ok(validatePlayoffMatch(finalVsTbd).some((error) => error.includes('two known participants')))
+
+const tiedFinal = { ...base, scoreA: 2, scoreB: 2, winnerSide: 'a' as const }
+assert.ok(validatePlayoffMatch(tiedFinal).some((error) => error.toLowerCase().includes('tied')))
+
+const destinationTbd = { kind: 'tbd' as const, identityId: null, snapshot: '' }
+assert.equal(advancementDecision(base, destinationTbd, 'winner').status, 'ready')
+assert.equal(advancementDecision(base, base.participantA, 'winner').status, 'noop')
+assert.equal(advancementDecision(base, base.participantB, 'winner').status, 'blocked')
+
+const corrected = { ...base, winnerSide: 'b' as const, scoreA: 1, scoreB: 3 }
+assert.equal(resultCorrectionConflict(base, corrected, [base.participantA]), true)
+assert.equal(resultCorrectionConflict(base, corrected, [destinationTbd]), false)
+
+const topologyRows = [
+  { playoffMatchId: 1, roundName: 'Quarterfinal', nextMatchId: 2, nextSlot: 1, loserNextMatchId: null, loserNextSlot: null },
+  { playoffMatchId: 2, roundName: 'Semifinal', nextMatchId: 3, nextSlot: 1, loserNextMatchId: null, loserNextSlot: null },
+  { playoffMatchId: 3, roundName: 'Final', nextMatchId: null, nextSlot: null, loserNextMatchId: null, loserNextSlot: null },
+]
+assert.deepEqual(validatePlayoffTopology(1, { ...base, roundName: 'Quarterfinal', nextMatchId: 2, nextSlot: 1, loserNextMatchId: null, loserNextSlot: null }, topologyRows), [])
+assert.ok(validatePlayoffTopology(1, { ...base, roundName: 'Quarterfinal', nextMatchId: 1, nextSlot: 1 }, topologyRows).some((error) => error.includes('same match')))
+assert.ok(validatePlayoffTopology(2, { ...base, roundName: 'Semifinal', nextMatchId: 1, nextSlot: 1 }, topologyRows).some((error) => error.includes('later round')))
 
 console.log('Playoff Admin validation tests passed.')

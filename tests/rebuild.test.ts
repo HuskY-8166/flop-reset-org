@@ -41,8 +41,8 @@ const reset = simulateCompetitiveReset({
     ratingSnapshots: [{ snapshot_id: 50, match_id: 40 }],
   },
   playoffMatches: [
-    { playoff_match_id: 60, series_id: 10, status: 'completed', score_a: 3, score_b: 1, slot1_score: 3, slot2_score: 1, winner_name: 'Fracture', winner_side: 'a', is_forfeit: true },
-    { playoff_match_id: 61, series_id: null, status: 'completed', score_a: 4, score_b: 2, slot1_score: 4, slot2_score: 2, winner_name: 'External Team', winner_side: 'a', is_forfeit: false },
+    { playoff_match_id: 60, series_id: 10, status: 'final', score_a: 3, score_b: 1, slot1_score: 3, slot2_score: 1, winner_name: 'Fracture', winner_side: 'a', is_forfeit: true },
+    { playoff_match_id: 61, series_id: null, status: 'final', score_a: 4, score_b: 2, slot1_score: 4, slot2_score: 2, winner_name: 'External Team', winner_side: 'a', is_forfeit: false },
   ],
 })
 
@@ -54,7 +54,7 @@ assert.deepEqual(reset.structural.scheduledMatches, [{ scheduled_id: 4 }])
 assert.deepEqual(reset.playoffMatches[0], {
   playoff_match_id: 60,
   series_id: null,
-  status: 'pending',
+  status: 'tbd',
   score_a: null,
   score_b: null,
   slot1_score: null,
@@ -66,7 +66,7 @@ assert.deepEqual(reset.playoffMatches[0], {
 assert.deepEqual(reset.playoffMatches[1], {
   playoff_match_id: 61,
   series_id: null,
-  status: 'completed',
+  status: 'final',
   score_a: 4,
   score_b: 2,
   slot1_score: 4,

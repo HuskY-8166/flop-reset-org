@@ -1,6 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
 import {
   PROCESS_SKILLS,
@@ -864,26 +865,14 @@ export default async function PlayerProfile({
     (rawPlayerRows ??
       []) as unknown as PlayerRow[]
 
-  if (
-    playerError ||
-    playerRows.length === 0
-  ) {
-    return (
-      <main className="px-4 md:px-8 py-16 max-w-6xl mx-auto">
-        <Link
-          href="/stats"
-          className="text-purple-400 hover:underline"
-        >
-          ← Back to Stats & Medals
-        </Link>
-
-        <div className="mt-10 rounded-2xl border border-neutral-800 bg-[#111111] p-8">
-          <h1 className="text-3xl font-black">
-            Player not found
-          </h1>
-        </div>
-      </main>
+  if (playerError) {
+    throw new Error(
+      `Unable to load player profile: ${playerError.message}`
     )
+  }
+
+  if (playerRows.length === 0) {
+    notFound()
   }
 
   const playerIds =

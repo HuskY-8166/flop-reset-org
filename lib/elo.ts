@@ -4,6 +4,7 @@ export type LeagueMatch = {
   id?: number | string | null
   competition_id?: number | string | null
   format?: string | null
+  competition_phase?: string | null
   round: string
   tier: string
   team_a: string
@@ -26,6 +27,7 @@ export type RatingMatchEvent = {
   result: 'W' | 'L'
   displayScore: string
   isForfeit: boolean
+  phase: string
   ratingBefore: number
   ratingAfter: number
   delta: number
@@ -50,9 +52,10 @@ export function ratingPoolKey(competitionId: number | string | null | undefined,
 
 function assertSingleRatingPool(matches: LeagueMatch[]) {
   const formats = new Set(matches.map((match) => match.format).filter(Boolean))
-  const competitions = new Set(matches.map((match) => match.competition_id).filter((value) => value !== null && value !== undefined))
+  const competitions = new Set(matches.map((match) => match.competition_id ?? 'unscoped'))
   if (formats.size > 1) throw new Error('The rating engine received multiple formats. Calculate each rating pool separately.')
   if (competitions.size > 1) throw new Error('The rating engine received multiple competitions. Calculate each rating pool separately.')
+  if (matches.length > 0 && competitions.has('unscoped')) throw new Error('The rating engine requires an explicit competition. Format-only Power pools are not supported.')
 }
 
 const TIER_SEED: Record<string, number> = {
@@ -69,7 +72,14 @@ function kForMatchCount(count: number) {
   return count <= sequence.length ? sequence[count - 1] : 24
 }
 
-function roundNumber(value: string) {
+function roundNumber(value: string, phase?: string | null) {
+  if (phase === 'playoffs') {
+    const normalized = value.toLowerCase()
+    if (normalized.includes('opening') || normalized.includes('round of 16')) return 6
+    if (normalized.includes('quarter')) return 7
+    if (normalized.includes('semi')) return 8
+    if (normalized.includes('final') || normalized.includes('3rd') || normalized.includes('third')) return 9
+  }
   return Number.parseInt(value.replace(/\D/g, ''), 10) || 0
 }
 
@@ -126,7 +136,7 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
   assertSingleRatingPool(inputMatches)
   const uniqueMatches = dedupeLeagueMatches(inputMatches)
   const completed = uniqueMatches
-    .map((match, inputOrder) => ({ ...match, inputOrder, roundNum: roundNumber(match.round) }))
+    .map((match, inputOrder) => ({ ...match, inputOrder, roundNum: roundNumber(match.round, match.competition_phase) }))
     .filter((match) => match.status === 'completed' && match.team_b && match.score_a !== null && match.score_b !== null)
     .sort((a, b) => a.roundNum - b.roundNum || String(a.match_date).localeCompare(String(b.match_date)) || a.inputOrder - b.inputOrder)
 
@@ -180,13 +190,13 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
         marginMultiplier = Math.min(1.5, margin / contextualAverage)
       }
 
-      const countA = (matchCounts[teamA] ?? 0) + 1
-      const countB = (matchCounts[teamB] ?? 0) + 1
+      const countA = (matchCounts[teamA] ?? 0) + (forfeit ? 0 : 1)
+      const countB = (matchCounts[teamB] ?? 0) + (forfeit ? 0 : 1)
       let kA = kForMatchCount(countA)
       let kB = kForMatchCount(countB)
       if (forfeit) {
-        kA /= 2
-        kB /= 2
+        kA = 0
+        kB = 0
       }
 
       const deltaA = kA * marginMultiplier * (actualA - expectationA)
@@ -209,6 +219,7 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
         result: actualA ? 'W' : 'L',
         displayScore: score,
         isForfeit: forfeit,
+        phase: match.competition_phase ?? 'regular_season',
         ratingBefore: ratingA,
         ratingAfter: ratings[teamA],
         delta: deltaA,
@@ -227,6 +238,7 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
         result: actualA ? 'L' : 'W',
         displayScore: forfeit ? `${actualA ? 'L' : 'W'} · FORFEIT · 0–0` : `${scoreB}–${scoreA}`,
         isForfeit: forfeit,
+        phase: match.competition_phase ?? 'regular_season',
         ratingBefore: ratingB,
         ratingAfter: ratings[teamB],
         delta: deltaB,
@@ -291,7 +303,14 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
     const bestWin = [...wins].sort((a, b) => b.surprise - a.surprise)[0] ?? null
     const worstLoss = [...losses].sort((a, b) => a.surprise - b.surprise)[0] ?? null
     const ratingsOnly = [TIER_SEED[tierOf[team]] ?? 1500, ...events.map((event) => event.ratingAfter)]
-    const confidence = events.length >= 10 ? 'Established' : events.length >= 4 ? 'Developing' : 'Provisional'
+    const regularSeasonSamples = performanceEvents.filter((event) => event.phase !== 'playoffs').length
+    const hasPostseason = performanceEvents.some((event) => event.phase === 'playoffs')
+    const confidence = hasPostseason
+      ? 'Postseason Updated'
+      : regularSeasonSamples >= 5 ? 'Full Regular Season'
+        : regularSeasonSamples === 4 ? 'Near Complete'
+          : regularSeasonSamples >= 2 ? 'Partial Season'
+            : 'Provisional'
     const currentRoundEvents = latestRound === undefined ? [] : events.filter((event) => event.round === latestRound && !event.isForfeit)
     const roundQuality = currentRoundEvents.reduce((sum, event) => sum + event.surprise, 0)
 
@@ -308,7 +327,7 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
       fullCircuitDelta: ratings[team] - (TIER_SEED[tierOf[team]] ?? 1500),
       peak: Math.max(...ratingsOnly),
       worst: Math.min(...ratingsOnly),
-      matchesTracked: events.length,
+      matchesTracked: performanceEvents.length,
       bestMatch: events.length ? Math.max(...events.map((event) => event.delta)) : 0,
       worstMatch: events.length ? Math.min(...events.map((event) => event.delta)) : 0,
       recentForm: recent.map((event) => event.result),
@@ -340,6 +359,11 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
     teamRoundHistory,
     teamSummaries: teamSummaries as Array<(typeof teamSummaries)[number] & { sosRank: number; sosTierSize: number }>,
     rounds,
+    finalRegularSeasonRound: rounds.filter((round) => round <= 5).at(-1) ?? null,
+    finalRegularSeasonSnapshot: rounds.filter((round) => round <= 5).at(-1) !== undefined
+      ? roundSnapshots[rounds.filter((round) => round <= 5).at(-1)!]
+      : [],
+    postseasonRounds: rounds.filter((round) => round > 5),
     totalTeams: Object.keys(ratings).length,
   }
 }

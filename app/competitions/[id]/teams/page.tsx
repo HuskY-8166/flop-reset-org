@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { EmptyState, PageHero, SectionHeader } from '@/components/ui'
 import { competitionIdentity } from '@/lib/competitions'
 import { calculateEloWithHistory, type LeagueMatch } from '@/lib/elo'
@@ -26,7 +27,7 @@ export default async function CompetitionTeamsPage({
     supabase.from('public_page_content_overrides').select('*').in('page_key', ['league-directory', `competition:${competitionId}:teams`]),
   ])
 
-  if (!competition) return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="Competition not found" description="This competition is not available." actionHref="/competitions" actionLabel="Back to competitions" /></main>
+  if (!competition) notFound()
   const identity = competitionIdentity(competition)
   const pageOverride = (pageResult.data ?? []).find((row) => row.page_key === `competition:${competitionId}:teams`) ?? (pageResult.data ?? []).find((row) => row.page_key === 'league-directory')
   if (pageOverride?.is_visible === false) return <main className="mx-auto max-w-5xl px-4 py-16"><EmptyState title="Team directory unavailable" description="This competition directory is currently hidden by an administrator." actionHref={`/competitions/${competitionId}`} actionLabel="Competition overview" /></main>

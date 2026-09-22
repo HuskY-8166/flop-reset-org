@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import type { Metadata } from 'next'
 import Link from 'next/link'
+import { notFound } from 'next/navigation'
 import { PlayoffBracket } from '@/components/PlayoffBracket'
-import { EmptyState, PageHero } from '@/components/ui'
+import { PageHero } from '@/components/ui'
 import { competitionIdentity } from '@/lib/competitions'
 import { normalizePlayoffData } from '@/lib/playoffs'
 import { supabase } from '@/lib/supabase'
@@ -25,7 +26,7 @@ export default async function CompetitionPlayoffs({ params }: { params: Promise<
     supabase.from('playoff_brackets').select('*').eq('competition_id', competitionId).order('tier'),
   ])
 
-  if (!competition) return <main className="mx-auto max-w-6xl px-4 py-16"><EmptyState title="Competition not found" description="This playoff archive is not available." actionHref="/competitions" actionLabel="Back to competitions" /></main>
+  if (!competition) notFound()
 
   const bracketIds = (brackets ?? []).map((bracket: any) => bracket.bracket_id)
   const { data: rawMatches, error: matchError } = bracketIds.length

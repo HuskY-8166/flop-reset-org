@@ -80,7 +80,7 @@ const playoffEntry: EditablePlayoffMatch = {
   roundName: 'Quarterfinal', matchOrder: 1,
   participantA: { kind: 'entry', identityId: 91, snapshot: 'Never Played United' },
   participantB: { kind: 'tbd', identityId: null, snapshot: '' },
-  scoreA: null, scoreB: null, bestOf: 7, scheduledAt: '', status: 'pending', winnerSide: null,
+  scoreA: null, scoreB: null, bestOf: 7, scheduledAt: '', status: 'tbd', winnerSide: null,
   isBye: false, isForfeit: false, seriesId: null, scheduledMatchId: null, notes: '',
   nextMatchId: null, nextSlot: null, loserNextMatchId: null, loserNextSlot: null,
 }

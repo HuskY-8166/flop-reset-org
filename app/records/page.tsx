@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
+import { fetchAllPages } from '@/lib/paginatedQuery'
 import {
   PROCESS_SKILLS,
   buildProcessSkillResults,
@@ -9,6 +10,7 @@ import {
   type ProcessPlayer,
 } from '@/lib/processSkills'
 import { countsAsPlayedGame, getGameOutcome } from '@/lib/results'
+import { phaseLabel, phaseMatchesFilter, type CompetitivePhaseFilter } from '@/lib/competitionPhase'
 
 export const dynamic = 'force-dynamic'
 
@@ -31,10 +33,13 @@ type Stat = {
   matches: { match_id: number; match_date: string | null; opponent_name: string | null
     flop_reset_score: number | null; opponent_score: number | null; series_id: number | null
     is_forfeit: boolean | null; forfeit_result?: string | null; result_override?: string | null
-    teams: { name: string | null; format: string | null } | null } | null
+    teams: { name: string | null; format: string | null } | null
+    series: { competition_id: number | null; competition_phase: string | null; competitions: { name: string | null } | null } | null } | null
 }
 
 type Series = { series_id: number; opponent_name: string | null; series_date: string | null
+  competition_id: number | null; competition_phase: string | null
+  competitions: { name: string | null } | null
   teams: { name: string | null; format: string | null } | null
   matches: { match_id: number; flop_reset_score: number | null; opponent_score: number | null
     is_forfeit: boolean | null; forfeit_result?: string | null; result_override?: string | null }[] | null }
@@ -146,23 +151,33 @@ function makeProcessPlayer(row: Career, stats: Stat[]): ProcessPlayer {
       positioningDepth: positionN > 0, airTimePct: airN > 0, zeroBoostPct: real('zero_boost_pct').length > 0 } }
 }
 
-export default async function Records({ searchParams }: { searchParams: Promise<{ format?: string }> }) {
+export default async function Records({ searchParams }: { searchParams: Promise<{ format?: string; phase?: string; competition?: string }> }) {
   const query = await searchParams
   const [{ data: rawStats }, { data: rawSeries }] = await Promise.all([
-    supabase.from('match_player_stats').select(`stat_id, player_id, goals, assists, saves, shots, score, mvp, bpm, avg_speed,
+    fetchAllPages((from,to)=>supabase.from('match_player_stats').select(`stat_id, player_id, goals, assists, saves, shots, score, mvp, bpm, avg_speed,
       demos_inflicted, demos_taken, boost_collected, boost_stolen, percentage_supersonic_speed, percentage_on_ground,
       percentage_low_air, percentage_high_air, percentage_defensive_third, percentage_neutral_third, percentage_offensive_third,
       percentage_most_back, percentage_most_forward, percentage_behind_ball, percentage_in_front_of_ball,
       percentage_defensive_half, percentage_offensive_half, avg_distance_to_ball, avg_distance_to_ball_has_possession,
       avg_distance_to_ball_no_possession, avg_distance_to_teammates, zero_boost_pct,
-      players ( name ), matches ( match_id, match_date, opponent_name, flop_reset_score, opponent_score, series_id, is_forfeit, teams ( name, format ) )`),
-    supabase.from('series').select(`series_id, opponent_name, series_date, teams ( name, format ), matches ( * )`),
+      players ( name ), matches ( match_id, match_date, opponent_name, flop_reset_score, opponent_score, series_id, is_forfeit, teams ( name, format ), series ( competition_id, competition_phase, competitions ( name ) ) )`).range(from,to)).then(data=>({data})),
+    fetchAllPages((from,to)=>supabase.from('series').select(`series_id, opponent_name, series_date, competition_id, competition_phase, competitions ( name ), teams ( name, format ), matches ( * )`).range(from,to)).then(data=>({data})),
   ])
   const allStats = (rawStats ?? []) as unknown as Stat[], allSeries = (rawSeries ?? []) as unknown as Series[]
   const formats = [...new Set(allStats.map((s) => s.matches?.teams?.format ?? '').filter(Boolean))].sort()
   const selected = query.format && formats.includes(query.format) ? query.format : 'All'
+  const selectedPhase: CompetitivePhaseFilter = query.phase === 'regular_season' || query.phase === 'playoffs' ? query.phase : 'all'
+  const competitionMap = new Map<number, string>()
+  allSeries.forEach((row) => {
+    const id = Number(row.competition_id)
+    if (Number.isFinite(id)) competitionMap.set(id, row.competitions?.name ?? `Competition ${id}`)
+  })
+  const competitions = [...competitionMap].map(([id, name]) => ({ id, name })).sort((a, b) => a.name.localeCompare(b.name))
+  const selectedCompetition = competitions.some((competition) => String(competition.id) === query.competition) ? query.competition! : 'All'
   const inFormat = (format?: string | null) => selected === 'All' || selected === format
-  const stats = allStats.filter((s) => inFormat(s.matches?.teams?.format)), series = allSeries.filter((s) => inFormat(s.teams?.format))
+  const inCompetition = (id?: number | null) => selectedCompetition === 'All' || String(id) === selectedCompetition
+  const stats = allStats.filter((s) => inFormat(s.matches?.teams?.format) && inCompetition(s.matches?.series?.competition_id) && phaseMatchesFilter(s.matches?.series?.competition_phase, selectedPhase))
+  const series = allSeries.filter((s) => inFormat(s.teams?.format) && inCompetition(s.competition_id) && phaseMatchesFilter(s.competition_phase, selectedPhase))
   const competitive = stats.filter((s) => !s.matches?.is_forfeit), careers = careerRows(competitive)
   const threshold = getEligibilityThreshold(careers), eligible = careers.filter((r) => r.games >= threshold)
 
@@ -266,11 +281,11 @@ export default async function Records({ searchParams }: { searchParams: Promise<
     }
   }
   timeline.sort((a,b) => (b.date ?? '').localeCompare(a.date ?? ''))
-  const uniqueGames = new Set(allSeries.flatMap((row) => row.matches ?? []).filter(countsAsPlayedGame).map((match) => match.match_id)).size
-  const uniquePlayers = new Set(allStats.map((s) => s.players?.name).filter(Boolean)).size
-  const uniqueTeams = new Set(allStats.map((s) => `${s.matches?.teams?.name}|${s.matches?.teams?.format}`)).size
-  const earliestStat = allStats.map((s) => s.matches?.match_date ?? '').filter(Boolean).sort()[0]
-  const earliestCompetition = allSeries.map((row) => row.series_date ?? '').filter(Boolean).sort()[0]
+  const uniqueGames = new Set(series.flatMap((row) => row.matches ?? []).filter(countsAsPlayedGame).map((match) => match.match_id)).size
+  const uniquePlayers = new Set(stats.map((s) => s.players?.name).filter(Boolean)).size
+  const uniqueTeams = new Set(stats.map((s) => `${s.matches?.teams?.name}|${s.matches?.teams?.format}`)).size
+  const earliestStat = stats.map((s) => s.matches?.match_date ?? '').filter(Boolean).sort()[0]
+  const earliestCompetition = series.map((row) => row.series_date ?? '').filter(Boolean).sort()[0]
   const advanced = stats.filter((s) => has(s.percentage_supersonic_speed) || has(s.zero_boost_pct)).length
   const basic = stats.filter((s) => has(s.bpm) || has(s.avg_speed) || has(s.demos_inflicted) || has(s.boost_collected)).length
   const held = new Map<string, { name: string; records: string[] }>()
@@ -289,9 +304,20 @@ export default async function Records({ searchParams }: { searchParams: Promise<
   const latestActivity = latestRecord ? timeline.filter((entry) => entry.date?.slice(0, 10) === latestRecord.date?.slice(0, 10)) : []
 
   const grid = (records: BookRecord[]) => <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{records.map((r) => <RecordCard key={r.label} record={r} />)}</div>
+  const recordHref = (next: { format?: string; phase?: CompetitivePhaseFilter; competition?: string }) => {
+    const params = new URLSearchParams()
+    const format = next.format ?? selected
+    const phase = next.phase ?? selectedPhase
+    const competition = next.competition ?? selectedCompetition
+    if (format !== 'All') params.set('format', format)
+    if (phase !== 'all') params.set('phase', phase)
+    if (competition !== 'All') params.set('competition', competition)
+    const suffix = params.toString()
+    return suffix ? `/records?${suffix}` : '/records'
+  }
   return <main className="mx-auto w-full min-w-0 max-w-7xl px-4 py-10 md:px-8 md:py-16">
     <header className="min-w-0 rounded-3xl border border-purple-900/40 bg-[radial-gradient(circle_at_top_right,rgba(175,105,238,.2),transparent_38%),linear-gradient(135deg,#18131d,#0d0d0d_62%)] p-6 md:p-10">
-      <div className="text-xs font-black uppercase tracking-[.28em] text-purple-400">Flop Reset</div><h1 className="mt-3 text-4xl font-black text-white md:text-7xl">RECORD BOOK</h1><p className="mt-3 text-neutral-400 md:text-lg">Competitive history since {earliestCompetition ? fmtDate(earliestCompetition) : 'the archive began'}; player-stat coverage is tracked separately.</p>
+      <div className="text-xs font-black uppercase tracking-[.28em] text-purple-400">Flop Reset · {phaseLabel(selectedPhase)}</div><h1 className="mt-3 text-4xl font-black text-white md:text-7xl">RECORD BOOK</h1><p className="mt-3 text-neutral-400 md:text-lg">Scoped competitive history since {earliestCompetition ? fmtDate(earliestCompetition) : 'the archive began'}; player-stat coverage is tracked separately.</p>
       <div className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">{[['Competitive Games',uniqueGames],['Competitive Series',allSeries.length],['Players Recorded',uniquePlayers],['Recorded Squads',uniqueTeams],['History Since',earliestCompetition ? fmtDate(earliestCompetition) : '—'],['Player Stats Since',earliestStat ? fmtDate(earliestStat) : '—']].map(([label,value]) => <div key={label} className="rounded-xl border border-white/10 bg-black/20 p-4"><div className="text-xs uppercase text-neutral-500">{label}</div><div className="mt-1 text-xl font-black text-white">{value}</div></div>)}</div>
       <div className="mt-4 grid gap-3 md:grid-cols-3">
         <div className="rounded-xl border border-amber-900/40 bg-black/20 p-4"><div className="text-xs uppercase text-amber-400">Current Record {recordKings.length === 1 ? 'King' : 'Leaders'}</div><div className="mt-1 text-xl font-black text-white">{recordKings.length ? recordKings.map((entry) => entry.name).join(' · ') : '—'}</div><div className="text-sm text-neutral-500">{recordKings.length ? `${recordKings[0].records.length} current records each` : 'No records yet'}</div></div>
@@ -299,7 +325,11 @@ export default async function Records({ searchParams }: { searchParams: Promise<
         <div className="rounded-xl border border-neutral-700 bg-black/20 p-4"><div className="text-xs uppercase text-neutral-500">Historical Standard</div><div className="mt-1 font-bold text-white">Date-safe progression</div><div className="text-sm text-neutral-500">No assumed same-day ordering</div></div>
       </div>
     </header>
-    <nav className="my-8 flex flex-wrap gap-2">{['All',...formats].map((f) => <Link key={f} href={f === 'All' ? '/records' : `/records?format=${encodeURIComponent(f)}`} className={`rounded-full px-4 py-2 text-sm font-bold ${selected === f ? 'bg-purple-700 text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>{f}</Link>)}</nav>
+    <section className="my-8 grid min-w-0 gap-3 md:grid-cols-3">
+      <nav className="flex min-w-0 flex-wrap gap-2">{['All',...formats].map((f) => <Link key={f} href={recordHref({ format: f })} className={`rounded-full px-4 py-2 text-sm font-bold ${selected === f ? 'bg-[#FF00A6] text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>{f === 'All' ? 'All Formats' : f}</Link>)}</nav>
+      <nav className="flex min-w-0 flex-wrap gap-2">{(['all','regular_season','playoffs'] as const).map((phase) => <Link key={phase} href={recordHref({ phase })} className={`rounded-full px-4 py-2 text-sm font-bold ${selectedPhase === phase ? 'bg-[#FF00A6] text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>{phaseLabel(phase)}</Link>)}</nav>
+      <nav aria-label="Competition scope" className="flex min-w-0 flex-wrap gap-2"><Link href={recordHref({ competition: 'All' })} className={`rounded-full px-4 py-2 text-sm font-bold ${selectedCompetition === 'All' ? 'bg-[#FF00A6] text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>All Competitions</Link>{competitions.map((competition) => <Link key={competition.id} href={recordHref({ competition: String(competition.id) })} className={`max-w-full break-words rounded-full px-4 py-2 text-sm font-bold ${selectedCompetition === String(competition.id) ? 'bg-[#FF00A6] text-white' : 'border border-neutral-800 bg-[#151515] text-neutral-400'}`}>{competition.name}</Link>)}</nav>
+    </section>
     <nav className="sticky top-0 z-20 mb-12 max-w-full min-w-0 overflow-x-auto rounded-xl border border-neutral-800 bg-[#0b0b0b]/95 px-4 py-3 backdrop-blur">
       <div className="flex min-w-max gap-5 text-xs font-bold uppercase tracking-wider text-neutral-500">{[['overview','Overview'],['career','Career'],['game','Game'],['series','Series'],['team','Team'],['process','Process'],['history','History']].map(([id,label]) => <a key={id} href={`#${id}`} className="hover:text-purple-300">{label}</a>)}</div>
     </nav>

@@ -2,33 +2,27 @@
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase'
 import { EmptyState, PageHero, ResultBadge, SectionHeader } from '@/components/ui'
-import { competitionIdentity, getCompetitionSummary } from '@/lib/competitions'
+import { getCompetitionSummary } from '@/lib/competitions'
+import { groupCompetitionsBySeason } from '@/lib/seasons'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Competitions() {
-  const [{ data: competitions }, { data: series }, { data: scheduled }] = await Promise.all([
+  const [{ data: competitions }, { data: series }, { data: scheduled }, { data: seasons }] = await Promise.all([
     supabase.from('competitions').select('*').order('id'),
-    supabase.from('series').select('competition_id, series_id, teams ( name, format ), matches ( * )'),
+    supabase.from('series').select('competition_id, series_id, opponent_name, notes, is_forfeit, result_override, teams ( name, format ), matches ( * )'),
     supabase.from('scheduled_matches').select('competition_id, scheduled_id, teams ( name, format )').eq('status', 'scheduled'),
+    supabase.from('public_competition_seasons').select('*').order('season_year', { ascending: false }),
   ])
-
-  const groups = new Map<string, { identity: ReturnType<typeof competitionIdentity>; competitions: any[] }>()
-  for (const competition of competitions ?? []) {
-    const identity = competitionIdentity(competition)
-    const group = groups.get(identity.groupKey) ?? { identity, competitions: [] }
-    group.competitions.push(competition)
-    groups.set(identity.groupKey, group)
-  }
+  const groups = groupCompetitionsBySeason(competitions ?? [], seasons ?? [])
 
   return <main className="mx-auto max-w-7xl px-4 py-10 md:px-8 md:py-14">
     <PageHero eyebrow="League & circuit archive" title="Competitions" description="Circuits remain historically separate, with independent 3v3 and 2v2 records inside each season." />
     <section className="mt-12">
       <SectionHeader eyebrow="Competition library" title="Recorded Circuits" description="Results, schedules, squads, and records stay separated by circuit and format." />
-      {groups.size ? <div className="space-y-8">{[...groups.values()].map(({ identity, competitions: groupCompetitions }) => <section key={identity.groupKey} className="rounded-3xl border border-neutral-800 bg-[#0f0f0f] p-5 md:p-7">
-        <div className="text-xs font-black uppercase tracking-[.24em] text-purple-400">{identity.league}</div>
-        <h2 className="mt-2 text-3xl font-black text-white">{identity.seasonLabel}</h2>
-        <div className="mt-5 grid gap-4 md:grid-cols-2">{groupCompetitions.sort((a, b) => String(a.format).localeCompare(String(b.format))).map((competition) => {
+      {groups.length ? <div className="space-y-8">{groups.map((group) => <section key={group.key} className="rounded-3xl border border-neutral-800 bg-[#0f0f0f] p-5 md:p-7">
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-start"><div><div className="text-xs font-black uppercase tracking-[.24em] text-purple-400">{group.league}</div><h2 className="mt-2 text-3xl font-black text-white">{group.name} {group.year}</h2><span className={`mt-3 inline-flex rounded-full border px-3 py-1 text-xs font-black ${group.status === 'completed' || group.status === 'archived' ? 'border-emerald-800 text-emerald-300' : 'border-neutral-700 text-neutral-400'}`}>{group.status.toUpperCase()}</span></div><Link href={`/competitions/archive/${group.slug}`} className="rounded-xl border border-purple-700 px-4 py-2 text-sm font-black text-purple-200 no-underline hover:bg-purple-950">Open season archive →</Link></div>
+        <div className="mt-5 grid gap-4 md:grid-cols-2">{group.competitions.map((competition) => {
           const attached = (series ?? []).filter((row: any) => Number(row.competition_id) === Number(competition.id))
           const summary = getCompetitionSummary({
             competition,

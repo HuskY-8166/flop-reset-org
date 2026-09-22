@@ -4,12 +4,10 @@ import { useMemo, useState } from 'react'
 import type { RatingRoundPoint } from '@/lib/elo'
 
 type Range = '3r' | '5r' | 'all' | '2w' | '4w'
-const FLOP_NAMES = ['Flop Reset Frameshift', 'Flop Reset - Frantic', 'Flop Reset | Fracture']
-const colors = ['#AF69EE', '#22c55e', '#38bdf8', '#f59e0b', '#f43f5e', '#a3e635', '#e879f9', '#fb7185']
+const colors = ['#FF00A6', '#42D7C0', '#C042D7', '#CAFF00', '#42A3D7', '#FF8824', '#f59e0b', '#f43f5e']
 
 export function PowerHistoryChart({ history, teams }: { history: Record<string, RatingRoundPoint[]>; teams: string[] }) {
-  const defaults = FLOP_NAMES.filter((team) => history[team]?.length)
-  const [selected, setSelected] = useState<string[]>(defaults.length ? defaults : teams.slice(0, 3))
+  const [selected, setSelected] = useState<string[]>(teams.filter((team) => history[team]?.length).slice(0, 3))
   const [candidate, setCandidate] = useState('')
   const [range, setRange] = useState<Range>('all')
   const [axis, setAxis] = useState<'round' | 'date'>('round')

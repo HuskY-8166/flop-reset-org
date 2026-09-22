@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { Geist, Geist_Mono, Rajdhani, Teko } from 'next/font/google'
 import { SiteNav } from '@/components/SiteNav'
-import { BUILD_NUMBER } from '@/lib/build'
+import { BUILD_NUMBER, RELEASE_NAME } from '@/lib/build'
 import './globals.css'
 
 const geistSans = Geist({ variable: '--font-geist-sans', subsets: ['latin'] })
@@ -21,7 +21,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
         <SiteNav />
         {children}
         <footer className="mt-auto px-4 py-5 text-center text-[10px] font-medium uppercase tracking-[0.22em] text-neutral-700">
-          Flop Reset · Build {BUILD_NUMBER}
+          Flop Reset · Build {BUILD_NUMBER} · {RELEASE_NAME}
         </footer>
       </body>
     </html>

@@ -1,13 +1,14 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { supabase } from '@/lib/supabase'
 import { formatPublicDate, getSeriesOutcome } from '@/lib/results'
+import { teamHref } from '@/lib/teamRoutes'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Schedule() {
   const { data: upcoming, error } = await supabase
     .from('scheduled_matches')
-    .select('scheduled_id, opponent_name, match_date, match_time, notes, competitions ( name ), teams ( name, format )')
+    .select('scheduled_id, opponent_name, match_date, match_time, notes, competitions ( name ), teams ( id, name, format )')
     .eq('status', 'scheduled')
     .order('match_date', { ascending: true })
 
@@ -30,7 +31,7 @@ export default async function Schedule() {
             {m === upcoming[0] && <div className="mb-3 text-xs font-black uppercase tracking-wider text-purple-400">Next Match</div>}
             <div className="flex items-baseline justify-between mb-1">
               <h2 className="text-xl md:text-2xl font-bold">
-                <a href={`/teams/${encodeURIComponent((m.teams as any)?.name ?? '')}`} className="text-white hover:underline">{(m.teams as any)?.name}</a> <span className="text-neutral-600">vs</span> {m.opponent_name ?? 'Opponent TBD'}
+                <a href={teamHref(m.teams as any)} className="text-white hover:underline">{(m.teams as any)?.name}</a> <span className="text-neutral-600">vs</span> {m.opponent_name ?? 'Opponent TBD'}
               </h2>
               <span className="text-sm text-neutral-400">{(m.competitions as any)?.name}</span>
             </div>

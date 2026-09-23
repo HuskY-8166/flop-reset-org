@@ -108,9 +108,9 @@ create index if not exists season_awards_public_idx
   where is_public;
 
 -- Build one season identity for every competition group that already has
--- verified league, circuit, and year values. Summer Circuit 2026 is marked
--- complete from the operator-confirmed conclusion of that event; no result or
--- placement is inferred here.
+-- verified league, circuit, and year values. Completion is never inferred
+-- from the name of an event; the guarded closeout script sets it only after
+-- phases, identities, rosters, brackets, and the final Power snapshot pass.
 with grouped as (
   select
     trim(league_name) as league_name,
@@ -119,9 +119,6 @@ with grouped as (
     min(starts_at) as starts_at,
     max(ends_at) as ends_at,
     case
-      when lower(trim(league_name)) = 'the rivalry'
-        and lower(trim(circuit_name)) = 'summer circuit'
-        and season_year = 2026 then 'completed'
       when bool_and(coalesce(current_stage, status, 'recorded') in ('completed', 'archived')) then 'completed'
       when bool_or(coalesce(current_stage, status, 'recorded') in ('regular_season', 'playoffs', 'active')) then 'active'
       when bool_and(coalesce(current_stage, status, 'recorded') = 'upcoming') then 'upcoming'

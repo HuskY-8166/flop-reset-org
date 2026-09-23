@@ -23,7 +23,7 @@ export default async function CompetitionPlayoffs({ params }: { params: Promise<
   const competitionId = Number(id)
   const [{ data: competition }, { data: brackets, error: bracketError }] = await Promise.all([
     supabase.from('competitions').select('*').eq('id', competitionId).maybeSingle(),
-    supabase.from('playoff_brackets').select('*').eq('competition_id', competitionId).order('tier'),
+    supabase.from('playoff_brackets').select('*').eq('competition_id', competitionId).neq('status', 'hidden').order('tier'),
   ])
 
   if (!competition) notFound()

@@ -58,7 +58,7 @@ export default async function CompetitionArchive({ params }: { params: Promise<{
     group.seasonId
       ? supabase.from('public_season_awards').select('*').eq('season_id', group.seasonId).order('award_type')
       : Promise.resolve({ data: [], error: null }),
-    supabase.from('playoff_brackets').select('*').in('competition_id', competitionIds).order('tier'),
+    supabase.from('playoff_brackets').select('*').in('competition_id', competitionIds).neq('status', 'hidden').order('tier'),
   ])
 
   const entries = entriesResult.data ?? []

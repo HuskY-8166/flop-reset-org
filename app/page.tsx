@@ -22,7 +22,7 @@ export default async function Home(){
     supabase.from('teams').select('id, name, format, captain, display_name, short_name, slug, primary_color, secondary_color, logo_url, wordmark_style, active, brand_metadata, players ( name )').order('name'),
     fetchAllPages((from,to)=>supabase.from('match_player_stats').select('stat_id, goals, assists, saves, shots, score, players ( name ), matches ( match_date, opponent_name, is_forfeit, teams ( id, name, format ) )').range(from,to)).then(data=>({data})),
     fetchAllPages((from,to)=>supabase.from('league_matches').select('competition_id, competition_phase, round, tier, team_a, team_b, score_a, score_b, status, match_date, format').range(from,to)).then(data=>({data})),
-    supabase.from('playoff_brackets').select('*, playoff_matches(*)').order('tier'),
+    supabase.from('playoff_brackets').select('*, playoff_matches(*)').neq('status','hidden').order('tier'),
     supabase.from('public_competition_entries').select('competition_id, fr_team_id, display_name_snapshot, tier'),
     supabase.from('public_competition_seasons').select('*').order('season_year',{ascending:false}),
   ])

@@ -411,6 +411,17 @@ grant select, insert, update, delete on table
   public.page_content_overrides
 to authenticated;
 
+grant usage, select on sequence
+  public.competition_sources_competition_source_id_seq,
+  public.external_team_sources_source_id_seq,
+  public.competition_entries_entry_id_seq,
+  public.league_players_league_player_id_seq,
+  public.competition_roster_members_roster_member_id_seq,
+  public.external_source_snapshots_snapshot_id_seq,
+  public.identity_reconciliation_queue_reconciliation_id_seq,
+  public.admin_audit_log_audit_id_seq
+to authenticated;
+
 grant select on table
   public.public_competition_entries,
   public.public_league_players,

@@ -38,6 +38,40 @@ alter table public.team_rating_snapshots
   add constraint team_rating_snapshots_format_valid
   check (format in ('2v2', '3v3')) not valid;
 
+alter table public.team_rating_snapshots enable row level security;
+
+do $$
+begin
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'team_rating_snapshots'
+      and policyname = 'team_rating_snapshots_admin_read'
+  ) then
+    create policy team_rating_snapshots_admin_read
+      on public.team_rating_snapshots
+      for select to authenticated
+      using (coalesce((auth.jwt() -> 'app_metadata' ->> 'site_admin')::boolean, false));
+  end if;
+
+  if not exists (
+    select 1 from pg_policies
+    where schemaname = 'public'
+      and tablename = 'team_rating_snapshots'
+      and policyname = 'team_rating_snapshots_admin_write'
+  ) then
+    create policy team_rating_snapshots_admin_write
+      on public.team_rating_snapshots
+      for all to authenticated
+      using (coalesce((auth.jwt() -> 'app_metadata' ->> 'site_admin')::boolean, false))
+      with check (coalesce((auth.jwt() -> 'app_metadata' ->> 'site_admin')::boolean, false));
+  end if;
+end $$;
+
+revoke all on table public.team_rating_snapshots from anon;
+grant select, insert, update, delete on table public.team_rating_snapshots to authenticated;
+grant usage, select on sequence public.team_rating_snapshots_snapshot_id_seq to authenticated;
+
 comment on table public.team_rating_snapshots is
   'Immutable rating output for historical charts, opponent intelligence, and future FR Markets snapshots. Rebuild under a new model_version; never rewrite old market evidence.';
 comment on column public.team_rating_snapshots.team_name_snapshot is

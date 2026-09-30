@@ -36,13 +36,14 @@ export default async function Home(){
   const officialSeries=[...competitionSummaries.values()].flatMap((summary)=>summary.officialSeries as any[]).sort((a:any,b:any)=>String(b.series_date??'').localeCompare(String(a.series_date??'')))
   const seriesWins=[...competitionSummaries.values()].reduce((sum,summary)=>sum+summary.seriesWins,0),seriesLosses=[...competitionSummaries.values()].reduce((sum,summary)=>sum+summary.seriesLosses,0),gameWins=[...competitionSummaries.values()].reduce((sum,summary)=>sum+summary.gameWins,0),gameLosses=[...competitionSummaries.values()].reduce((sum,summary)=>sum+summary.gameLosses,0)
   const currentTeams=(teams??[]).filter(isCurrentTeam)
+  const currentTeamIds=new Set(currentTeams.map((team:any)=>Number(team.id)))
   const activePlayers=new Set(currentTeams.flatMap((team:any)=>(team.players??[]).map((p:any)=>p.name))).size
   const groupedTeams=new Map<number,any>()
   ;currentTeams.forEach((team:any)=>{groupedTeams.set(Number(team.id),{id:Number(team.id),name:team.name,formats:[team.format],players:team.players??[],brand:brandingForTeam(team)})})
   const latest=officialSeries[0] as any,latestOutcome=getSeriesOutcome(latest?.matches??[],latest),latestWins=latestOutcome.wins,latestLosses=latestOutcome.losses,latestIsForfeit=latestOutcome.forfeits>0
   const form=officialSeries.slice(0,5).map((s:any)=>{const outcome=getSeriesOutcome(s.matches??[],s);return{id:s.series_id,won:outcome.won,href:`/matches/${s.series_id}`}})
   const activeCompetition=(competitions??[]).find((competition:any)=>competition.status==='active'&&competition.format==='3v3')??(competitions??[]).find((competition:any)=>competition.status==='active')
-  const activeEntries=(competitionEntries??[]).filter((entry:any)=>Number(entry.competition_id)===Number(activeCompetition?.id)&&entry.fr_team_id)
+  const activeEntries=(competitionEntries??[]).filter((entry:any)=>Number(entry.competition_id)===Number(activeCompetition?.id)&&currentTeamIds.has(Number(entry.fr_team_id)))
   const activeEntryNameToTeam=new Map(activeEntries.map((entry:any)=>[String(entry.display_name_snapshot),Number(entry.fr_team_id)]))
   const teamNameById=new Map((teams??[]).map((team:any)=>[Number(team.id),String(team.name)]))
   const power=activeCompetition?calculateEloWithHistory((leagueMatches??[]).filter((match:any)=>Number(match.competition_id)===Number(activeCompetition.id)&&match.format===activeCompetition.format&&phaseIsPowerEvidence(match.competition_phase)) as any).teamSummaries.filter((summary)=>activeEntryNameToTeam.has(summary.team)).map((summary)=>({...summary,teamId:activeEntryNameToTeam.get(summary.team)!,short:teamNameById.get(activeEntryNameToTeam.get(summary.team)!)??summary.team,format:activeCompetition.format})):[]

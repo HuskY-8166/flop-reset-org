@@ -20,6 +20,16 @@ const fracture = { id: 3, name: 'Fracture', format: '3v3', active: true }
 const lifecycle = partitionTeams([frantic, future, fracture])
 assert.deepEqual(lifecycle.current.map((team) => team.name), ['Future', 'Fracture'])
 assert.deepEqual(lifecycle.historical.map((team) => team.name), ['Frantic'])
+const currentTeamIds = new Set(lifecycle.current.map((team) => team.id))
+const summerEntries = [
+  { fr_team_id: frantic.id, display_name_snapshot: 'Flop Reset - Frantic' },
+  { fr_team_id: fracture.id, display_name_snapshot: 'Flop Reset - Fracture' },
+]
+assert.deepEqual(
+  summerEntries.filter((entry) => currentTeamIds.has(entry.fr_team_id)).map((entry) => entry.display_name_snapshot),
+  ['Flop Reset - Fracture'],
+  'current-context widgets must not revive a historical team through an old competition entry'
+)
 assert.equal(teamHref(future), '/teams/41')
 assert.equal(teamHref(frantic), '/teams/7')
 assert.notEqual(teamHref(future), teamHref(frantic), 'Future must never reuse the Frantic route')

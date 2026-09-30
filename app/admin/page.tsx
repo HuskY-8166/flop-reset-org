@@ -45,6 +45,7 @@ type TeamRegistration = {
   id: number
   name: string
   format: string
+  active: boolean
 }
 
 type PlayoffImportTarget = {
@@ -1078,7 +1079,7 @@ export default function Admin() {
 
       const { data: teamData, error: teamsError } = await supabase
         .from('teams')
-        .select('id, name, format')
+        .select('id, name, format, active')
         .order('id')
 
       if (teamsError) {
@@ -1088,7 +1089,8 @@ export default function Admin() {
 
       const registrations = (teamData ?? []) as TeamRegistration[]
       setTeamRegistrations(registrations)
-      const firstTeam = registrations[0]?.name ?? ''
+      const currentRegistrations = registrations.filter((team) => team.active !== false)
+      const firstTeam = currentRegistrations[0]?.name ?? registrations[0]?.name ?? ''
       setTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
       setImportTeam((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
       setScheduleTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
@@ -3626,6 +3628,7 @@ export default function Admin() {
   const selectedImportCompetition = competitions.find(
     (competition) => String(competition.id) === importCompetitionId
   )
+  const currentTeamRegistrations = teamRegistrations.filter((team) => team.active !== false)
   const selectedTeamFormats = new Set(
     teamRegistrations
       .filter((team) => team.name === importTeam)
@@ -3893,7 +3896,7 @@ export default function Admin() {
               }
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
             >
-              {[...new Set(teamRegistrations.filter((team) => team.format === competitions.find((competition) => String(competition.id) === competitionId)?.format).map((team) => team.name))].map((team) => <option key={team} value={team}>{team}</option>)}
+              {[...new Set(currentTeamRegistrations.filter((team) => team.format === competitions.find((competition) => String(competition.id) === competitionId)?.format).map((team) => team.name))].map((team) => <option key={team} value={team}>{team}</option>)}
             </select>
           </label>
 
@@ -4533,7 +4536,7 @@ export default function Admin() {
                 }
                 className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
               >
-                {[...new Set(teamRegistrations.filter((team) => team.format === competitions.find((competition) => String(competition.id) === scheduleCompetitionId)?.format).map((team) => team.name))].map((team) => <option key={team} value={team}>{team}</option>)}
+                {[...new Set(currentTeamRegistrations.filter((team) => team.format === competitions.find((competition) => String(competition.id) === scheduleCompetitionId)?.format).map((team) => team.name))].map((team) => <option key={team} value={team}>{team}</option>)}
               </select>
             </label>
 

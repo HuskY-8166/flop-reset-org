@@ -3,16 +3,15 @@ import { supabase } from '@/lib/supabase'
 import { teamHref } from '@/lib/teamRoutes'
 import { brandingForTeam } from '@/lib/teamBranding'
 import { partitionTeams } from '@/lib/teamLifecycle'
+import { buildCurrentRosterContexts } from '@/lib/currentRosters'
 export const dynamic = 'force-dynamic'
 
 export default async function Teams() {
-  const { data: teams, error } = await supabase
-    .from('teams')
-    .select(`
+  const [teamResult, seasonResult, competitionResult, entryResult, rosterResult] = await Promise.all([
+    supabase.from('teams').select(`
       id,
       name,
       format,
-      captain,
       display_name,
       short_name,
       slug,
@@ -21,12 +20,24 @@ export default async function Teams() {
       logo_url,
       wordmark_style,
       active,
-      brand_metadata,
-      players ( name, status )
-    `)
-    .order('name')
+      brand_metadata
+    `).order('name'),
+    supabase.from('public_competition_seasons').select('season_id, status, season_year, starts_at'),
+    supabase.from('competitions').select('id, season_id, format, status, current_stage, start_date'),
+    supabase.from('public_competition_entries').select('entry_id, competition_id, fr_team_id, registration_status, status'),
+    supabase.from('public_competition_roster_members').select('roster_member_id, entry_id, display_name_snapshot, role, is_current, status, league_player_slug, league_player_display_name'),
+  ])
 
+  const teams = teamResult.data ?? []
+  const error = teamResult.error ?? seasonResult.error ?? competitionResult.error ?? entryResult.error ?? rosterResult.error
   const { current } = partitionTeams(teams ?? [])
+  const currentRosters = buildCurrentRosterContexts({
+    teams: current,
+    seasons: seasonResult.data ?? [],
+    competitions: competitionResult.data ?? [],
+    entries: entryResult.data ?? [],
+    members: rosterResult.data ?? [],
+  })
   const teams3v3 = current.filter((team) => team.format === '3v3')
   const teams2v2 = current.filter((team) => team.format === '2v2')
 
@@ -36,6 +47,8 @@ export default async function Teams() {
         {list.length === 0 && <div className="col-span-full rounded-xl border border-neutral-800 bg-[#111] p-5 text-sm text-neutral-500">No teams are registered in this format yet.</div>}
         {list.map((team) => {
           const brand = brandingForTeam(team)
+          const roster = currentRosters.get(Number(team.id))?.members ?? []
+          const captain = roster.find((member) => member.role === 'captain')
           return (
           <div
             key={team.id}
@@ -48,20 +61,16 @@ export default async function Teams() {
                 <a href={teamHref(team)} className="hover:underline">{brand.name}</a>
               </h2>              <span className="text-xs uppercase tracking-wide text-neutral-400">{team.format}</span>
             </div>
-            {team.captain && <p className="text-sm text-neutral-400 mb-4">Captain: {team.captain}</p>}
+            {captain && <p className="text-sm text-neutral-400 mb-4">Captain: {captain.display_name_snapshot}</p>}
             <ul className="space-y-1">
-              {(team.players as any)?.filter((p: any) => !p.status || p.status === 'active').map((p: any, i: number) => (
-                <li key={i}>
-                  <a
-                    href={`/players/${encodeURIComponent(p.name)}`}
-                    className="text-neutral-200 hover:text-white hover:underline"
-                  >
-                    {p.name}
-                  </a>
+              {roster.map((member: any) => (
+                <li key={member.roster_member_id ?? `${member.entry_id}-${member.display_name_snapshot}`} className="flex items-center justify-between gap-3">
+                  {member.league_player_slug ? <a href={`/league/players/${member.league_player_slug}`} className="text-neutral-200 hover:text-white hover:underline">{member.display_name_snapshot}</a> : <span className="text-neutral-200">{member.display_name_snapshot}</span>}
+                  {member.role && member.role !== 'player' ? <span className="text-[10px] font-bold uppercase tracking-wide text-neutral-600">{member.role}</span> : null}
                 </li>
               ))}
             </ul>
-            {!(team.players as any)?.filter((player: any) => !player.status || player.status === 'active').length ? <p className="mt-4 text-sm text-neutral-500">Roster coming soon.</p> : null}
+            {!roster.length ? <p className="mt-4 text-sm text-neutral-500">Roster coming soon.</p> : null}
           </div>
         )})}
       </div>

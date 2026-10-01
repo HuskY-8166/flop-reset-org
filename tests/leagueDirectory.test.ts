@@ -29,6 +29,13 @@ assert.equal(parsed3v3.snapshot?.entries[0].roster[2].role, 'manager')
 assert.equal(parsed2v2.snapshot?.format, '2v2 Doubles')
 assert.notEqual(parsed3v3.snapshot?.entries[1].sourceRegistrationKey, parsed2v2.snapshot?.entries[0].sourceRegistrationKey, '2v2 and 3v3 source registrations must remain isolated')
 assert.ok(sourceSnapshotCanApply(parsed3v3.snapshot, parsed3v3.errors))
+const linkedTeamHtml = fixture3v3.replace(
+  '<span class="rivalry-roster-acc-name">Zero Orbit</span>',
+  '<a href="/teams/stable-zero"><span class="rivalry-roster-acc-name">Zero Orbit</span></a>',
+)
+const linkedTeamEntry = parseRivalryCompetitionHtml(linkedTeamHtml, 'https://therivalry.gg/competitions/comp-3v3').snapshot?.entries[0]
+assert.equal(linkedTeamEntry?.externalTeamId, 'stable-zero', 'team-page links provide the stable Rivalry team identity')
+assert.equal(linkedTeamEntry?.sourceRegistrationKey, 'rivalry:team:stable-zero', 'stable team identity replaces display-name-derived registration identity')
 const parsedTeam = parseRivalryTeamHtml(teamFixture, 'https://therivalry.gg/teams/team-zero')
 assert.deepEqual(parsedTeam.errors, [])
 assert.equal(parsedTeam.snapshot?.externalTeamId, 'team-zero')
@@ -68,6 +75,33 @@ const duplicatePreview = buildLeagueSyncPreview(source3v3, [{
 }])
 assert.equal(duplicatePreview.possibleDuplicates.length, 1, 'same display name must not auto-merge')
 assert.equal(duplicatePreview.newTeams.length, 2)
+
+const stableIdentitySnapshot = {
+  ...source3v3,
+  declaredEntryCount: 1,
+  entries: [{
+    ...source3v3.entries[0],
+    displayName: 'FRCS',
+    externalTeamId: 'stable-frcs',
+    sourceRegistrationKey: 'rivalry:team:stable-frcs',
+  }],
+}
+const stableIdentityEntry = {
+  entry_id: 161,
+  display_name_snapshot: 'Fracture',
+  source_registration_key: 'legacy-name-derived-key',
+  source_external_id: 'stable-frcs',
+}
+const wrongNameMatch = {
+  entry_id: 162,
+  display_name_snapshot: 'FRCS',
+  source_registration_key: 'rivalry:team:stable-frcs',
+  source_external_id: 'different-stable-team',
+}
+const stablePreview = buildLeagueSyncPreview(stableIdentitySnapshot, [stableIdentityEntry, wrongNameMatch])
+assert.equal(stablePreview.newTeams.length, 0, 'a known stable Rivalry team ID updates its existing entry instead of creating a duplicate')
+assert.equal(stablePreview.changedTeams[0]?.existing.entry_id, 161, 'stable Rivalry team ID takes precedence over registration-key or display-name matches')
+assert.deepEqual(stablePreview.removedTeams.map((entry) => entry.entry_id), [162], 'the conflicting non-stable match is not treated as the source team')
 
 const archived = archiveRemovedRosterMembers(
   [{ source_member_key: 'old-player', is_current: true, status: 'active' }],

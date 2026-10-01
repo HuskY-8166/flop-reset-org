@@ -190,7 +190,10 @@ export function parseRivalryCompetitionHtml(
     const tierText = classText(card, 'rivalry-roster-card-tier')
     const openingTag = card.slice(0, card.indexOf('>') + 1)
     const tierExternalId = openingTag.match(/data-tier-id=["']([^"']+)["']/i)?.[1] ?? ''
-    const externalTeamId = openingTag.match(/data-team-id=["']([^"']+)["']/i)?.[1] ?? null
+    const linkedTeamId = card.match(/href=["'][^"']*\/teams\/([^/?#"']+)/i)?.[1] ?? null
+    const externalTeamId = linkedTeamId
+      ?? openingTag.match(/data-team-id=["']([^"']+)["']/i)?.[1]
+      ?? null
     const logoUrl = card.match(/(?:src|data-logo-url)=["']([^"']+)["']/i)?.[1] ?? null
     const people = [...card.matchAll(/<div\s+class=["'][^"']*\brivalry-roster-person\b[^"']*["'][^>]*>([\s\S]*?)(?=<div\s+class=["'][^"']*\brivalry-roster-person\b|<\/div>\s*<\/div>)/gi)]
       .map((match) => {
@@ -318,7 +321,8 @@ export function buildLeagueSyncPreview(
   currentEntries: DirectoryEntryLike[],
 ): SyncPreview {
   const byKey = new Map(currentEntries.filter((entry) => entry.source_registration_key).map((entry) => [entry.source_registration_key as string, entry]))
-  const sourceKeys = new Set(snapshot.entries.map((entry) => entry.sourceRegistrationKey))
+  const byExternalId = new Map(currentEntries.filter((entry) => entry.source_external_id).map((entry) => [entry.source_external_id as string, entry]))
+  const matchedEntries = new Set<DirectoryEntryLike>()
   const newTeams: SourceCompetitionEntry[] = []
   const changedTeams: SyncPreview['changedTeams'] = []
   const possibleDuplicates: SyncPreview['possibleDuplicates'] = []
@@ -329,7 +333,9 @@ export function buildLeagueSyncPreview(
   let unchanged = 0
 
   for (const source of snapshot.entries) {
-    const existing = byKey.get(source.sourceRegistrationKey)
+    const existing = source.externalTeamId
+      ? byExternalId.get(source.externalTeamId) ?? byKey.get(source.sourceRegistrationKey)
+      : byKey.get(source.sourceRegistrationKey)
     if (!existing) {
       const candidates = currentEntries.filter((entry) => normalizeLeagueIdentity(entry.display_name_snapshot) === normalizeLeagueIdentity(source.displayName))
       if (candidates.length) possibleDuplicates.push({ source, candidates })
@@ -337,6 +343,7 @@ export function buildLeagueSyncPreview(
       source.roster.forEach((member) => newRosterMembers.push({ team: source.displayName, member }))
       continue
     }
+    matchedEntries.add(existing)
 
     const currentRoster = existing.competition_roster_members ?? []
     const rosterByKey = new Map(currentRoster.map((member) => [member.source_member_key, member]))
@@ -370,7 +377,7 @@ export function buildLeagueSyncPreview(
     }
   }
 
-  const removedTeams = currentEntries.filter((entry) => entry.source_registration_key && !sourceKeys.has(entry.source_registration_key))
+  const removedTeams = currentEntries.filter((entry) => entry.source_registration_key && !matchedEntries.has(entry))
   return {
     newTeams,
     changedTeams,

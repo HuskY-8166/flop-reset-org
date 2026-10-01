@@ -797,27 +797,59 @@ export default function Admin() {
       return
     }
 
-    const {
-      data: players,
-      error,
-    } = await supabase
-      .from('players')
-      .select(
-        'player_id, name, aliases'
-      )
-      .eq(
-        'team_id',
-        teamRow.id
-      )
+    const { data: entry, error: entryError } = await supabase
+      .from('competition_entries')
+      .select('entry_id')
+      .eq('competition_id', selectedCompetitionId)
+      .eq('fr_team_id', teamRow.id)
+      .maybeSingle()
 
-    if (error) {
+    if (entryError || !entry) {
       setRosterPlayers([])
       return
     }
 
-    setRosterPlayers(
-      players ?? []
-    )
+    const { data: rosterMembers, error: rosterError } = await supabase
+      .from('competition_roster_members')
+      .select('display_name_snapshot, league_player_id')
+      .eq('entry_id', entry.entry_id)
+      .eq('is_current', true)
+
+    if (rosterError || !rosterMembers?.length) {
+      setRosterPlayers([])
+      return
+    }
+
+    const leaguePlayerIds = rosterMembers.map((member) => member.league_player_id).filter(Boolean)
+    const { data: leaguePlayers, error: leaguePlayerError } = leaguePlayerIds.length
+      ? await supabase.from('league_players').select('league_player_id, linked_fr_player_id').in('league_player_id', leaguePlayerIds)
+      : { data: [], error: null }
+    if (leaguePlayerError) {
+      setRosterPlayers([])
+      return
+    }
+
+    const linkedPlayerByLeagueId = new Map((leaguePlayers ?? []).map((player) => [Number(player.league_player_id), Number(player.linked_fr_player_id)]))
+    const linkedPlayerIds = [...new Set([...linkedPlayerByLeagueId.values()].filter(Number.isFinite))]
+    const { data: players, error: playerError } = linkedPlayerIds.length
+      ? await supabase.from('players').select('player_id, name, aliases').in('player_id', linkedPlayerIds)
+      : { data: [], error: null }
+    if (playerError) {
+      setRosterPlayers([])
+      return
+    }
+
+    const playerById = new Map((players ?? []).map((player) => [Number(player.player_id), player]))
+    setRosterPlayers(rosterMembers.flatMap((member) => {
+      const linkedPlayerId = linkedPlayerByLeagueId.get(Number(member.league_player_id))
+      const player = linkedPlayerId ? playerById.get(linkedPlayerId) : null
+      if (!player) return []
+      return [{
+        player_id: player.player_id,
+        name: member.display_name_snapshot,
+        aliases: [...new Set([player.name, ...(player.aliases ?? [])].filter((alias) => alias !== member.display_name_snapshot))],
+      }]
+    }))
   }
 
   async function loadManageData() {

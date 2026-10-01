@@ -30,7 +30,8 @@ export async function POST(request: Request) {
   const { data: currentEntries, error: currentError } = await client.from('competition_entries').select('*').eq('competition_id', competitionId)
   if (currentError) return Response.json({ error: currentError.message }, { status: 500 })
   const byKey = new Map((currentEntries ?? []).filter((entry) => entry.source_registration_key).map((entry) => [entry.source_registration_key, entry]))
-  const sourceKeys = new Set(snapshot.entries.map((entry) => entry.sourceRegistrationKey))
+  const byExternalId = new Map((currentEntries ?? []).filter((entry) => entry.source_external_id).map((entry) => [entry.source_external_id, entry]))
+  const matchedEntryIds = new Set<number>()
   const now = new Date().toISOString()
   const counters = { created: 0, updated: 0, archived: 0, rosterCreated: 0, rosterArchived: 0, unresolved: 0 }
 
@@ -53,7 +54,9 @@ export async function POST(request: Request) {
       }
     }
 
-    const existing = byKey.get(sourceEntry.sourceRegistrationKey)
+    const existing = sourceEntry.externalTeamId
+      ? byExternalId.get(sourceEntry.externalTeamId) ?? byKey.get(sourceEntry.sourceRegistrationKey)
+      : byKey.get(sourceEntry.sourceRegistrationKey)
     const base = {
       competition_id: competitionId,
       external_source_id: externalSource?.source_id ?? null,
@@ -73,6 +76,7 @@ export async function POST(request: Request) {
         .eq('entry_id', existing.entry_id).select().single()
       if (error || !data) return Response.json({ error: error?.message ?? 'Competition entry update failed.' }, { status: 500 })
       entry = data
+      matchedEntryIds.add(Number(existing.entry_id))
       counters.updated += 1
     } else {
       const { data, error } = await client.from('competition_entries').insert({
@@ -163,7 +167,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const removedEntryIds = (currentEntries ?? []).filter((entry) => entry.source_registration_key && !sourceKeys.has(entry.source_registration_key)).map((entry) => entry.entry_id)
+  const removedEntryIds = (currentEntries ?? []).filter((entry) => entry.source_registration_key && !matchedEntryIds.has(Number(entry.entry_id))).map((entry) => entry.entry_id)
   if (removedEntryIds.length) {
     const archived = await client.from('competition_entries').update({ registration_status: 'withdrawn', competitive_status: 'inactive', status: 'withdrawn', left_at: now, updated_at: now }).in('entry_id', removedEntryIds)
     if (archived.error) return Response.json({ error: archived.error.message }, { status: 500 })

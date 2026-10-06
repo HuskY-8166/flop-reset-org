@@ -2,29 +2,30 @@
 import { supabase } from '@/lib/supabase'
 import { formatPublicDate, getSeriesOutcome } from '@/lib/results'
 import { teamHref } from '@/lib/teamRoutes'
+import { groupCompetitionsBySeason } from '@/lib/seasons'
+import { operationalCompetitionIds, rowsForCompetitionIds, selectOperationalSeason } from '@/lib/fallOperations'
 
 export const dynamic = 'force-dynamic'
 
 export default async function Schedule() {
-  const { data: upcoming, error } = await supabase
-    .from('scheduled_matches')
-    .select('scheduled_id, opponent_name, match_date, match_time, notes, competitions ( name ), teams ( id, name, format )')
-    .eq('status', 'scheduled')
-    .order('match_date', { ascending: true })
-
-  const { data: history } = await supabase
-    .from('series')
-    .select('series_id, opponent_name, series_date, notes, teams ( name, format ), matches ( * )')
-    .order('series_date', { ascending: false })
+  const [{ data: allUpcoming, error }, { data: history }, { data: competitions }, { data: seasons }] = await Promise.all([
+    supabase.from('scheduled_matches').select('scheduled_id, competition_id, opponent_name, match_date, match_time, notes, competitions ( name ), teams ( id, name, format )').eq('status', 'scheduled').order('match_date', { ascending: true }),
+    supabase.from('series').select('series_id, competition_id, opponent_name, series_date, notes, teams ( name, format ), matches ( * )').order('series_date', { ascending: false }),
+    supabase.from('competitions').select('*'),
+    supabase.from('public_competition_seasons').select('*'),
+  ])
+  const operationalSeason = selectOperationalSeason(groupCompetitionsBySeason(competitions ?? [], seasons ?? []))
+  const operationalIds = operationalCompetitionIds(operationalSeason)
+  const upcoming = rowsForCompetitionIds(allUpcoming ?? [], operationalIds)
 
   return (
     <main className="px-4 py-10 md:px-8 md:py-14 max-w-6xl mx-auto">
-      <div className="mb-10 rounded-3xl border border-neutral-800 bg-gradient-to-br from-[#171717] to-[#0d0d0d] p-6 md:p-9"><div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">What’s next</div><h1 className="mt-2 text-4xl font-bold md:text-6xl">Match <span style={{ color: '#AF69EE' }}>Schedule</span></h1><p className="mt-2 text-neutral-400">Upcoming Flop Reset fixtures, with completed history one click away.</p></div>
+      <div className="mb-10 rounded-3xl border border-neutral-800 bg-[radial-gradient(circle_at_top_right,rgba(168,85,247,.2),transparent_45%),#111] p-6 md:p-9"><div className="text-xs font-bold uppercase tracking-[.22em] text-purple-400">{operationalSeason?.name??'Current season'} {operationalSeason?.year}</div><h1 className="mt-2 text-4xl font-bold md:text-6xl">Match <span style={{ color: '#AF69EE' }}>Center</span></h1><p className="mt-2 max-w-2xl text-neutral-400">Verified current-season fixtures first, with completed organization history preserved below.</p><div className="mt-5 flex flex-wrap gap-2">{operationalSeason?.competitions.map((competition)=><a key={competition.id} href={`/competitions/${competition.id}`} className="rounded-full border border-purple-700 px-4 py-2 text-sm font-bold text-purple-200 no-underline hover:bg-purple-950">{competition.format} hub</a>)}</div></div>
       {error && <div className="rounded-xl border border-red-900 bg-red-950/20 p-4 text-red-300">Something went wrong while loading the schedule. Please try again shortly.</div>}
 
       <div className="space-y-4 mb-10">
         {(!upcoming || upcoming.length === 0) && (
-          <div className="rounded-xl border border-neutral-800 bg-[#111] p-6 text-neutral-500">No upcoming match is currently scheduled.</div>
+          <div className="rounded-2xl border border-purple-900/70 bg-purple-950/10 p-6"><div className="text-xs font-black uppercase tracking-[.18em] text-purple-300">Opening week watch</div><div className="mt-2 text-xl font-black text-white">Fixtures have not been generated</div><p className="mt-2 text-sm text-neutral-500">Both Rivalry competition feeds currently report zero matches. Opponents and dates will appear here only after verified source publication.</p></div>
         )}
         {upcoming?.map((m) => (
           <div key={m.scheduled_id} className={`rounded-2xl border p-5 ${m === upcoming[0] ? 'border-purple-700 bg-purple-950/20 md:p-8' : 'border-neutral-800 bg-[#111]'}`}>

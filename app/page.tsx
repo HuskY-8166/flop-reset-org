@@ -19,7 +19,7 @@ export const dynamic='force-dynamic'
 export default async function Home(){
   const [{data:competitions},{data:upcoming},{data:series},{data:teams},{data:stats},{data:leagueMatches},{data:playoffBrackets},{data:competitionEntries},{data:seasons},{data:competitionRosters}]=await Promise.all([
     supabase.from('competitions').select('*'),
-    supabase.from('scheduled_matches').select('scheduled_id, opponent_name, match_date, match_time, competition_id, teams ( name, format )').eq('status','scheduled').order('match_date').limit(3),
+    supabase.from('scheduled_matches').select('scheduled_id, opponent_name, match_date, match_time, competition_id, teams ( id, name, format )').eq('status','scheduled').order('match_date').limit(3),
     fetchAllPages((from,to)=>supabase.from('series').select('series_id, competition_id, opponent_name, series_date, notes, teams ( id, name, format ), matches ( * )').order('series_date',{ascending:false}).range(from,to)).then(data=>({data})),
     supabase.from('teams').select('id, name, format, display_name, short_name, slug, primary_color, secondary_color, logo_url, wordmark_style, active, brand_metadata').order('name'),
     fetchAllPages((from,to)=>supabase.from('match_player_stats').select('stat_id, goals, assists, saves, shots, score, players ( name ), matches ( match_date, opponent_name, is_forfeit, teams ( id, name, format ) )').range(from,to)).then(data=>({data})),

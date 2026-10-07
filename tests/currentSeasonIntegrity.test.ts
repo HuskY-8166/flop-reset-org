@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { getCompetitionSummaryCore } from '../lib/competitionSummaryCore.ts'
 import { rowsForCompetitionIds, rowsForMatchCompetitionIds } from '../lib/fallOperations.ts'
 import { getSeriesOutcome, type GameLike, type SeriesResultLike } from '../lib/results.ts'
@@ -71,5 +73,10 @@ const scheduledOnly = summarize('3v3', [], [{ status: 'scheduled', teams: { name
 assert.equal(scheduledOnly.seriesWins, 0, 'a scheduled fixture never counts as a completed result')
 assert.equal(scheduledOnly.seriesLosses, 0)
 assert.equal(scheduledOnly.upcomingMatches.length, 1)
+
+const homeSource = readFileSync(fileURLToPath(new URL('../app/page.tsx', import.meta.url)), 'utf8')
+assert.doesNotMatch(homeSource, /rowsForCompetitionIds\(upcoming\?\?\[\],operationalIds\)\.slice/, 'the current schedule total is not truncated to the homepage display count')
+const uiSource = readFileSync(fileURLToPath(new URL('../components/ui.tsx', import.meta.url)), 'utf8')
+assert.match(uiSource, /unplayed = wins === 0 && losses === 0/, 'an unplayed 0–0 record renders without a misleading tie label')
 
 console.log('Current-season integrity tests passed.')

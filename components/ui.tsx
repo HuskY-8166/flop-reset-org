@@ -27,8 +27,8 @@ export function EmptyState({ title, description, actionHref, actionLabel }: { ti
 }
 
 export function ResultBadge({ wins, losses }: { wins: number; losses: number }) {
-  const won = wins > losses, tied = wins === losses
-  return <span className={`rounded-full px-3 py-1 text-sm font-black ${tied ? 'bg-neutral-800 text-neutral-300' : won ? 'bg-emerald-950 text-emerald-400' : 'bg-red-950 text-red-400'}`}>{tied ? 'T' : won ? 'W' : 'L'} {wins}–{losses}</span>
+  const won = wins > losses, tied = wins === losses, unplayed = wins === 0 && losses === 0
+  return <span className={`rounded-full px-3 py-1 text-sm font-black ${tied ? 'bg-neutral-800 text-neutral-300' : won ? 'bg-emerald-950 text-emerald-400' : 'bg-red-950 text-red-400'}`}>{unplayed ? '' : tied ? 'T ' : won ? 'W ' : 'L '}{wins}–{losses}</span>
 }
 
 export function SeriesResultBadge({ result, wins, losses, isForfeit = false }: {

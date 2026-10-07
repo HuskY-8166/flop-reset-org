@@ -37,7 +37,7 @@ export default async function Home(){
   const completedSeries=(series??[]).filter((row:any)=>completedCompetitionIds.has(Number(row.competition_id)))
   const completedTeamCount=new Set(completedSeries.map((row:any)=>Number(row.teams?.id)).filter(Number.isFinite)).size
   const officialSeries=[...competitionSummaries.values()].flatMap((summary)=>summary.officialSeries as any[]).sort((a:any,b:any)=>String(b.series_date??'').localeCompare(String(a.series_date??'')))
-  const currentSeries=rowsForCompetitionIds(officialSeries,operationalIds),currentUpcoming=rowsForCompetitionIds(upcoming??[],operationalIds).slice(0,3),currentStats=rowsForMatchCompetitionIds(stats??[],operationalIds),currentSummaries=[...competitionSummaries.entries()].filter(([id])=>operationalIds.has(Number(id))).map(([,summary])=>summary)
+  const currentSeries=rowsForCompetitionIds(officialSeries,operationalIds),currentUpcoming=rowsForCompetitionIds(upcoming??[],operationalIds),currentStats=rowsForMatchCompetitionIds(stats??[],operationalIds),currentSummaries=[...competitionSummaries.entries()].filter(([id])=>operationalIds.has(Number(id))).map(([,summary])=>summary)
   const seriesWins=currentSummaries.reduce((sum,summary)=>sum+summary.seriesWins,0),seriesLosses=currentSummaries.reduce((sum,summary)=>sum+summary.seriesLosses,0),gameWins=currentSummaries.reduce((sum,summary)=>sum+summary.gameWins,0),gameLosses=currentSummaries.reduce((sum,summary)=>sum+summary.gameLosses,0)
   const currentTeams=(teams??[]).filter(isCurrentTeam)
   const currentTeamIds=new Set(currentTeams.map((team:any)=>Number(team.id)))

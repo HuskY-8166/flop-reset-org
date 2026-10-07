@@ -38,6 +38,13 @@ export function rowsForCompetitionIds<T extends { competition_id?: number | stri
   return rows.filter((row) => competitionIds.has(Number(row.competition_id)))
 }
 
+export function rowsForMatchCompetitionIds<T extends { matches?: { competition_id?: number | string | null } | Array<{ competition_id?: number | string | null }> | null }>(rows: T[], competitionIds: Set<number>) {
+  return rows.filter((row) => {
+    const match = Array.isArray(row.matches) ? row.matches[0] : row.matches
+    return competitionIds.has(Number(match?.competition_id))
+  })
+}
+
 export function lifecycleLabel(status: unknown) {
   const value = normalized(status)
   if (value === 'active' || value === 'regular_season' || value === 'playoffs') return 'Live now'

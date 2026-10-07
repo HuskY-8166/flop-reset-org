@@ -1,4 +1,10 @@
 export const RATING_MODEL_VERSION = 'FR-ELO-1.0'
+export const EQUAL_POOL_INITIAL_RATING = 1500
+export const PRESEASON_ROUND_NUMBER = 0
+
+export type RatingEngineOptions = {
+  initialRating?: number
+}
 
 export type LeagueMatch = {
   id?: number | string | null
@@ -122,8 +128,8 @@ export function dedupeLeagueMatches(matches: LeagueMatch[]) {
   })
 }
 
-export function calculateElo(matches: LeagueMatch[]) {
-  const { teamSummaries } = calculateEloWithHistory(matches)
+export function calculateElo(matches: LeagueMatch[], options?: RatingEngineOptions) {
+  const { teamSummaries } = calculateEloWithHistory(matches, options)
   return teamSummaries.map((team) => ({
     team: team.team,
     tier: team.tier,
@@ -132,7 +138,7 @@ export function calculateElo(matches: LeagueMatch[]) {
   }))
 }
 
-export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
+export function calculateEloWithHistory(inputMatches: LeagueMatch[], options: RatingEngineOptions = {}) {
   assertSingleRatingPool(inputMatches)
   const uniqueMatches = dedupeLeagueMatches(inputMatches)
   const completed = uniqueMatches
@@ -148,7 +154,7 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
 
   function getRating(team: string, tier: string) {
     if (!(team in ratings)) {
-      ratings[team] = TIER_SEED[tier] ?? 1500
+      ratings[team] = options.initialRating ?? TIER_SEED[tier] ?? EQUAL_POOL_INITIAL_RATING
       tierOf[team] = tier
       matchHistory[team] = []
       giantKiller[team] = { upsets: 0, largestGap: 0, cumulativeGap: 0 }
@@ -302,7 +308,8 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
     const losses = performanceEvents.filter((event) => event.result === 'L')
     const bestWin = [...wins].sort((a, b) => b.surprise - a.surprise)[0] ?? null
     const worstLoss = [...losses].sort((a, b) => a.surprise - b.surprise)[0] ?? null
-    const ratingsOnly = [TIER_SEED[tierOf[team]] ?? 1500, ...events.map((event) => event.ratingAfter)]
+    const initialRating = options.initialRating ?? TIER_SEED[tierOf[team]] ?? EQUAL_POOL_INITIAL_RATING
+    const ratingsOnly = [initialRating, ...events.map((event) => event.ratingAfter)]
     const regularSeasonSamples = performanceEvents.filter((event) => event.phase !== 'playoffs').length
     const hasPostseason = performanceEvents.some((event) => event.phase === 'playoffs')
     const confidence = hasPostseason
@@ -324,7 +331,7 @@ export function calculateEloWithHistory(inputMatches: LeagueMatch[]) {
       lastRoundDelta: roundDelta(1),
       threeRoundDelta: roundDelta(3),
       fiveRoundDelta: roundDelta(5),
-      fullCircuitDelta: ratings[team] - (TIER_SEED[tierOf[team]] ?? 1500),
+      fullCircuitDelta: ratings[team] - initialRating,
       peak: Math.max(...ratingsOnly),
       worst: Math.min(...ratingsOnly),
       matchesTracked: performanceEvents.length,

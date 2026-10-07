@@ -9,6 +9,7 @@ import { formatPublicDate, getSeriesOutcome } from '@/lib/results'
 import { competitionRanks } from '@/lib/stats'
 import { teamHref } from '@/lib/teamRoutes'
 import { seasonSlug } from '@/lib/seasons'
+import { ScheduledMatchCard } from '@/components/ScheduledMatchCard'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,7 +27,7 @@ export default async function Competition({ params }: { params: Promise<{ id: st
   const [{ data: competition }, { data: rawSeries }, { data: rawUpcoming }, { data: rawStats }, { data: entries }, { data: roster }] = await Promise.all([
     supabase.from('competitions').select('*').eq('id', competitionId).maybeSingle(),
     supabase.from('series').select('series_id, opponent_name, series_date, notes, flop_reset_team_id, teams ( name, format ), matches ( * )').eq('competition_id', competitionId).order('series_date', { ascending: false }),
-    supabase.from('scheduled_matches').select('scheduled_id, opponent_name, match_date, match_time, teams ( name, format )').eq('competition_id', competitionId).eq('status', 'scheduled').order('match_date'),
+    supabase.from('scheduled_matches').select('scheduled_id, opponent_name, match_date, scheduled_local_time, match_time, timezone, best_of, competition_phase, stage_label, tier, source_url, competitions ( name ), teams ( id, name, format )').eq('competition_id', competitionId).eq('status', 'scheduled').order('match_date').order('scheduled_local_time'),
     supabase.from('match_player_stats').select('goals, assists, saves, score, players ( name ), matches!inner ( competition_id, is_forfeit, teams ( name, format ) )').eq('matches.competition_id', competitionId),
     supabase.from('public_competition_entries').select('entry_id, fr_team_id, display_name_snapshot, registration_status, status').eq('competition_id', competitionId).not('fr_team_id', 'is', null),
     supabase.from('public_competition_roster_members').select('entry_id, roster_member_id, is_current, status').eq('competition_id', competitionId),
@@ -69,7 +70,7 @@ export default async function Competition({ params }: { params: Promise<{ id: st
       {summary.integrityProblems.length > 0 && <div className="mt-5 rounded-2xl border border-amber-800/60 bg-amber-950/20 p-5"><div className="font-bold text-amber-200">History temporarily incomplete</div><p className="mt-2 text-sm text-amber-100/70">Some recorded results are unavailable while the circuit archive is being corrected.</p></div>}
     </section>
 
-    <section id="schedule" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Next fixtures" title="Schedule" />{upcoming.length ? <div className="grid gap-3 md:grid-cols-2">{upcoming.map((match: any) => <article key={match.scheduled_id} className="rounded-2xl border border-neutral-800 bg-[#111] p-5"><div className="text-xs text-neutral-600">{formatPublicDate(match.match_date)} {match.match_time || ''} · {match.teams?.format}</div><div className="mt-2 text-lg font-bold text-white">{match.teams?.name} <span className="text-neutral-600">vs</span> {match.opponent_name ?? 'Opponent TBD'}</div></article>)}</div> : <EmptyState title="Rivalry fixtures not generated yet" description="The source currently reports zero matches. This page will remain empty rather than inventing opening-week opponents or dates." />}</section>
+    <section id="schedule" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Next fixtures" title="Schedule" />{upcoming.length ? <div className="grid gap-3 md:grid-cols-2">{upcoming.map((match: any) => <ScheduledMatchCard key={match.scheduled_id} match={match} />)}</div> : <EmptyState title="Rivalry fixtures not generated yet" description="The source currently reports zero matches. This page will remain empty rather than inventing opening-week opponents or dates." />}</section>
 
     <section id="results" className="mt-14 scroll-mt-28"><SectionHeader eyebrow="Completed series" title="Results" description="Dates, squads, opponents, format, series record, and forfeit status use one consistent competition context." />{series.length ? <div className="space-y-3">{series.map((row: any) => { const outcome = getSeriesOutcome(row.matches ?? [], row); const isForfeit = outcome.forfeits > 0; return <Link key={row.series_id} href={`/matches/${row.series_id}`} className="flex flex-col justify-between gap-3 rounded-xl border border-neutral-800 bg-[#111] p-4 text-white no-underline hover:border-purple-800 sm:flex-row sm:items-center"><div><div className="text-xs text-neutral-600">{formatPublicDate(row.series_date)} · {row.teams?.format}</div><div className="mt-1 font-bold">{row.teams?.name} vs {row.opponent_name}</div></div>{isForfeit ? <div className="text-right"><div className="font-black text-emerald-400">{outcome.won ? 'W' : 'L'} · FORFEIT</div><div className="text-xs font-bold text-amber-300">0–0 public score</div></div> : <ResultBadge wins={outcome.wins} losses={outcome.losses} />}</Link> })}</div> : <EmptyState title="Match history is currently being rebuilt" description="Verified results will appear here as they are imported." />}</section>
 

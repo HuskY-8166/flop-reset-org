@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { calculateEloWithHistory, RATING_MODEL_VERSION, type LeagueMatch } from '../lib/elo.ts'
+import { calculateEloWithHistory, EQUAL_POOL_INITIAL_RATING, RATING_MODEL_VERSION, type LeagueMatch } from '../lib/elo.ts'
 
 function match(overrides: Partial<LeagueMatch>): LeagueMatch {
   return {
@@ -107,5 +107,12 @@ assert.equal(
   'postseason results must not overwrite the final regular-season snapshot',
 )
 assert.equal(postseason.teamSummaries.find((team) => team.team === 'A')!.confidence, 'Postseason Updated')
+
+const equalPool = calculateEloWithHistory([
+  match({ id: 19, tier: 'Tier 1', team_a: 'A', team_b: 'B' }),
+], { initialRating: EQUAL_POOL_INITIAL_RATING })
+assert.equal(equalPool.matchHistory.A[0].ratingBefore, 1500)
+assert.equal(equalPool.matchHistory.B[0].ratingBefore, 1500)
+assert.equal(equalPool.teamSummaries.find((team) => team.team === 'A')!.fullCircuitDelta, equalPool.matchHistory.A[0].delta)
 
 console.log('Power Engine domain tests passed.')

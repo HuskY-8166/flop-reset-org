@@ -33,6 +33,7 @@ type Competition = {
   id: number
   name: string
   format: string
+  timezone?: string | null
 }
 
 type RosterPlayer = {
@@ -74,6 +75,11 @@ type CompetitionEntryLink = {
   opponent_id: number | null
   display_name_snapshot: string
   tier: string | null
+}
+
+type OpponentOption = {
+  opponent_id: number
+  canonical_name: string
 }
 
 type Game = {
@@ -486,6 +492,9 @@ export default function Admin() {
   const [importPlayoffMatchId, setImportPlayoffMatchId] =
     useState('')
 
+  const [importScheduledMatchId, setImportScheduledMatchId] =
+    useState('')
+
   const [playoffImportTargets, setPlayoffImportTargets] =
     useState<PlayoffImportTarget[]>([])
 
@@ -550,9 +559,9 @@ export default function Admin() {
   // ---------------------------------------------------------------------------
 
   const [
-    scheduleTeamName,
-    setScheduleTeamName,
-  ] = useState('Frameshift')
+    scheduleTeamId,
+    setScheduleTeamId,
+  ] = useState('')
 
   const [
     scheduleCompetitionId,
@@ -560,8 +569,8 @@ export default function Admin() {
   ] = useState('')
 
   const [
-    scheduleOpponent,
-    setScheduleOpponent,
+    scheduleOpponentId,
+    setScheduleOpponentId,
   ] = useState('')
 
   const [
@@ -573,6 +582,14 @@ export default function Admin() {
     scheduleTime,
     setScheduleTime,
   ] = useState('')
+
+  const [scheduleTimezone, setScheduleTimezone] = useState('America/New_York')
+  const [scheduleBestOf, setScheduleBestOf] = useState('5')
+  const [schedulePhase, setSchedulePhase] = useState<CompetitionPhase>('regular_season')
+  const [scheduleStage, setScheduleStage] = useState('')
+  const [scheduleSourceProvider, setScheduleSourceProvider] = useState('')
+  const [scheduleSourceExternalId, setScheduleSourceExternalId] = useState('')
+  const [scheduleSourceUrl, setScheduleSourceUrl] = useState('')
 
   const [
     scheduleNotes,
@@ -588,6 +605,8 @@ export default function Admin() {
     scheduledList,
     setScheduledList,
   ] = useState<any[]>([])
+
+  const [opponentOptions, setOpponentOptions] = useState<OpponentOption[]>([])
 
   // ---------------------------------------------------------------------------
   // Power Rankings
@@ -657,11 +676,26 @@ export default function Admin() {
         .from('scheduled_matches')
         .select(`
           scheduled_id,
+          competition_id,
+          competition_entry_id,
+          flop_reset_team_id,
+          opponent_id,
           opponent_name,
           match_date,
           match_time,
+          scheduled_local_time,
+          scheduled_time_locked,
+          timezone,
+          best_of,
+          competition_phase,
+          stage_label,
+          tier,
+          source_provider,
+          source_external_id,
+          source_url,
           status,
           teams (
+            id,
             name,
             format
           )
@@ -1095,7 +1129,7 @@ export default function Admin() {
       } = await supabase
         .from('competitions')
         .select(
-          'id, name, format'
+          'id, name, format, timezone'
         )
         .order('id')
 
@@ -1125,9 +1159,9 @@ export default function Admin() {
       const firstTeam = currentRegistrations[0]?.name ?? registrations[0]?.name ?? ''
       setTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
       setImportTeam((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
-      setScheduleTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
+      setScheduleTeamId((current) => registrations.some((team) => String(team.id) === current) ? current : String(currentRegistrations[0]?.id ?? registrations[0]?.id ?? ''))
 
-      const [playoffResult, entryResult] = await Promise.all([
+      const [playoffResult, entryResult, opponentResult] = await Promise.all([
         supabase
           .from('playoff_matches')
           .select('playoff_match_id, bracket_id, round_name, team_a_name, team_b_name, flop_reset_team_a_id, flop_reset_team_b_id, opponent_a_id, opponent_b_id, competition_entry_a_id, competition_entry_b_id, best_of, is_bye, is_forfeit, series_id, playoff_brackets!inner(competition_id, tier, name)')
@@ -1135,11 +1169,17 @@ export default function Admin() {
         supabase
           .from('competition_entries')
           .select('entry_id, competition_id, fr_team_id, opponent_id, display_name_snapshot, tier'),
+        supabase
+          .from('opponents')
+          .select('opponent_id, canonical_name')
+          .order('canonical_name'),
       ])
       if (playoffResult.error) console.error(playoffResult.error)
       if (entryResult.error) console.error(entryResult.error)
+      if (opponentResult.error) console.error(opponentResult.error)
       setPlayoffImportTargets((playoffResult.data ?? []) as unknown as PlayoffImportTarget[])
       setCompetitionEntryLinks((entryResult.data ?? []) as CompetitionEntryLink[])
+      setOpponentOptions((opponentResult.data ?? []) as OpponentOption[])
 
       if (list.length) {
         const firstId =
@@ -1153,6 +1193,7 @@ export default function Admin() {
         )
         setImportCompetitionId(String(importDefault?.id ?? list[0].id))
         setScheduleCompetitionId(firstId)
+        setScheduleTimezone(list[0].timezone ?? 'America/New_York')
         setPrCompetitionId(firstId)
       }
 
@@ -2590,6 +2631,11 @@ export default function Admin() {
           competition_phase:
             importSeriesType,
 
+          scheduled_match_id:
+            selectedScheduledMatch
+              ? Number(selectedScheduledMatch.scheduled_id)
+              : null,
+
           best_of:
             intendedBestOf,
 
@@ -3258,30 +3304,36 @@ export default function Admin() {
     )
 
     try {
-      const { team } = await resolveCompetitionTeam(scheduleCompetitionId, scheduleTeamName)
-      const { error } = await supabase.from('scheduled_matches').insert({
-        competition_id:
-          scheduleCompetitionId,
-
-        flop_reset_team_id:
-          team.id,
-
-        opponent_name:
-          scheduleOpponent ||
-          null,
-
-        match_date:
-          scheduleDate,
-
-        match_time:
-          scheduleTime,
-
-        notes:
-          scheduleNotes,
-
-        status:
-          'scheduled',
-      })
+      const team = teamRegistrations.find((row) => String(row.id) === scheduleTeamId)
+      const opponent = opponentOptions.find((row) => String(row.opponent_id) === scheduleOpponentId)
+      const entry = competitionEntryLinks.find((row) =>
+        Number(row.competition_id) === Number(scheduleCompetitionId) &&
+        Number(row.fr_team_id) === Number(scheduleTeamId)
+      )
+      if (!team || !entry) throw new Error('Choose a verified Fall competition entry.')
+      if (!opponent) throw new Error('Choose a verified canonical opponent. Unresolved opponents must be reconciled first.')
+      const bestOf = Number(scheduleBestOf)
+      if (!Number.isInteger(bestOf) || bestOf < 1 || bestOf % 2 === 0) throw new Error('Best-of must be a positive odd number.')
+      if (!scheduleDate || !scheduleTimezone.trim()) throw new Error('Verified date and timezone are required. Exact time may remain TBD.')
+      if (!scheduleSourceProvider.trim() && scheduleSourceExternalId.trim()) {
+        throw new Error('A source provider is required when a stable match ID is supplied.')
+      }
+      const { error } = await supabase.rpc('create_verified_scheduled_match', { payload: {
+        competition_id: Number(scheduleCompetitionId),
+        competition_entry_id: entry.entry_id,
+        flop_reset_team_id: team.id,
+        opponent_id: opponent.opponent_id,
+        match_date: scheduleDate,
+        scheduled_local_time: scheduleTime || null,
+        timezone: scheduleTimezone.trim(),
+        best_of: bestOf,
+        competition_phase: schedulePhase,
+        stage_label: scheduleStage.trim() || null,
+        source_provider: scheduleSourceProvider.trim() || null,
+        source_external_id: scheduleSourceExternalId.trim() || null,
+        source_url: scheduleSourceUrl.trim() || null,
+        notes: scheduleNotes.trim() || null,
+      } })
 
       if (error) throw error
 
@@ -3289,15 +3341,31 @@ export default function Admin() {
       'Scheduled match added!'
     )
 
-    setScheduleOpponent('')
+    setScheduleOpponentId('')
     setScheduleDate('')
     setScheduleTime('')
+    setScheduleStage('')
+    setScheduleSourceExternalId('')
+    setScheduleSourceUrl('')
     setScheduleNotes('')
 
       loadScheduled()
     } catch (error: any) {
       setScheduleMessage(`Error: ${error.message}`)
     }
+  }
+
+  async function editScheduledTime(scheduled: any) {
+    const current = scheduled.scheduled_local_time ?? scheduled.match_time ?? ''
+    const localTime = window.prompt('Enter owner-managed local time (HH:MM), or leave blank for Time TBD:', current)
+    if (localTime === null) return
+    const { error } = await supabase.rpc('set_scheduled_match_local_time', {
+      p_scheduled_id: scheduled.scheduled_id,
+      p_local_time: localTime.trim() || null,
+      p_timezone: scheduled.timezone || 'America/New_York',
+    })
+    setScheduleMessage(error ? `Error: ${error.message}` : localTime.trim() ? 'Fixture time updated.' : 'Fixture time set to TBD.')
+    if (!error) loadScheduled()
   }
 
   async function deleteScheduled(
@@ -3316,25 +3384,6 @@ export default function Admin() {
         'scheduled_matches'
       )
       .delete()
-      .eq(
-        'scheduled_id',
-        id
-      )
-
-    loadScheduled()
-  }
-
-  async function markCompleted(
-    id: number
-  ) {
-    await supabase
-      .from(
-        'scheduled_matches'
-      )
-      .update({
-        status:
-          'completed',
-      })
       .eq(
         'scheduled_id',
         id
@@ -3687,6 +3736,16 @@ export default function Admin() {
     Number(row.playoff_brackets?.competition_id) === Number(importCompetitionId) &&
     !row.series_id && !row.is_bye && !row.is_forfeit
   )
+  const compatibleScheduledMatches = scheduledList.filter((row) =>
+    row.status === 'scheduled' &&
+    Number(row.competition_id) === Number(importCompetitionId) &&
+    Number(row.flop_reset_team_id) === Number(targetRegistration?.id) &&
+    row.competition_phase === importSeriesType
+  )
+  const selectedScheduledMatch = compatibleScheduledMatches.find((row) => String(row.scheduled_id) === importScheduledMatchId)
+  const selectedScheduledOpponent = selectedScheduledMatch
+    ? opponentOptions.find((row) => Number(row.opponent_id) === Number(selectedScheduledMatch.opponent_id))
+    : null
   const previewErrors = games.length ? [
     ...playersSummaryErrors,
     ...importValidation.errors,
@@ -3696,6 +3755,9 @@ export default function Admin() {
     ...(!importDate ? ['Series date is missing.'] : []),
     ...(!bestOfValid ? ['A valid odd best-of value is required.'] : []),
     ...(importSeriesType === 'playoffs' && !selectedPlayoffTarget ? ['A playoff match is required for a playoff import.'] : []),
+    ...(selectedScheduledMatch && normalizeOpponentName(importOpponent) !== normalizeOpponentName(selectedScheduledOpponent?.canonical_name ?? selectedScheduledMatch.opponent_name) ? ['Selected fixture opponent does not match the CSV opponent.'] : []),
+    ...(selectedScheduledMatch && importDate !== selectedScheduledMatch.match_date ? ['Selected fixture date does not match the imported series date.'] : []),
+    ...(selectedScheduledMatch && Number(selectedScheduledMatch.best_of) !== intendedBestOf ? ['Selected fixture best-of does not match the import.'] : []),
   ] : [...playersSummaryErrors, ...importValidation.errors]
   const safeToImport = games.length > 0 && previewErrors.length === 0 &&
     (importMode === 'new' || importMode === 'backfill')
@@ -4126,6 +4188,7 @@ export default function Admin() {
                 setImportCompetitionId(
                   e.target.value
                 )
+                setImportScheduledMatchId('')
                 clearImportPreview()
               }}
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
@@ -4157,6 +4220,7 @@ export default function Admin() {
                 setImportTeam(
                   e.target.value
                 )
+                setImportScheduledMatchId('')
                 clearImportPreview()
               }}
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
@@ -4197,12 +4261,23 @@ export default function Admin() {
             <legend className="px-2 text-sm font-black text-white">Series Type</legend>
             <div className="grid grid-cols-2 gap-2">
               {(['regular_season', 'playoffs'] as const).map((phase) => (
-                <button key={phase} type="button" onClick={() => { setImportSeriesType(phase); setImportPlayoffMatchId(''); clearImportPreview() }} className={`rounded-lg border px-3 py-3 text-sm font-black ${importSeriesType === phase ? 'border-[#FF00A6] bg-[#FF00A6]/15 text-white' : 'border-neutral-800 text-neutral-500'}`}>
+                <button key={phase} type="button" onClick={() => { setImportSeriesType(phase); setImportPlayoffMatchId(''); setImportScheduledMatchId(''); clearImportPreview() }} className={`rounded-lg border px-3 py-3 text-sm font-black ${importSeriesType === phase ? 'border-[#FF00A6] bg-[#FF00A6]/15 text-white' : 'border-neutral-800 text-neutral-500'}`}>
                   {phase === 'regular_season' ? 'Regular Season' : 'Playoffs'}
                 </button>
               ))}
             </div>
           </fieldset>
+
+          {importSeriesType === 'regular_season' && <label className="block mb-5">
+            Linked scheduled match (when this result was scheduled):
+            <select value={importScheduledMatchId} onChange={(event) => setImportScheduledMatchId(event.target.value)} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full">
+              <option value="">No verified fixture link</option>
+              {compatibleScheduledMatches.map((row) => <option key={row.scheduled_id} value={row.scheduled_id}>
+                #{row.scheduled_id} · {row.opponent_name} · {row.match_date} {row.scheduled_local_time ?? row.match_time ?? 'Time TBD'} · BO{row.best_of}
+              </option>)}
+            </select>
+            <span className="mt-1 block text-xs text-neutral-500">Linking preserves the original fixture and marks it completed only after the series is created.</span>
+          </label>}
 
           {importSeriesType === 'playoffs' && <label className="block mb-5">
             Playoff Match:
@@ -4266,6 +4341,7 @@ export default function Admin() {
                   <div><dt className="text-neutral-500">Format</dt><dd className="font-semibold text-white">{selectedImportCompetition?.format ?? '—'}</dd></div>
                   <div><dt className="text-neutral-500">Phase</dt><dd className="font-semibold text-white">{importSeriesType === 'playoffs' ? 'Playoffs' : 'Regular Season'}</dd></div>
                   {importSeriesType === 'playoffs' && <div><dt className="text-neutral-500">Bracket Match</dt><dd className="font-semibold text-white">{selectedPlayoffTarget ? `${selectedPlayoffTarget.playoff_brackets?.tier ?? 'Tier ?'} · ${selectedPlayoffTarget.round_name}` : '—'}</dd></div>}
+                  {importSeriesType === 'regular_season' && <div><dt className="text-neutral-500">Scheduled Match</dt><dd className="font-semibold text-white">{selectedScheduledMatch ? `#${selectedScheduledMatch.scheduled_id}` : 'Not linked'}</dd></div>}
                   <div><dt className="text-neutral-500">Team</dt><dd className="font-semibold text-white">{importTeam}</dd></div>
                   <div><dt className="text-neutral-500">Opponent</dt><dd className="font-semibold text-white">{importOpponent || '—'}</dd></div>
                   <div><dt className="text-neutral-500">Date</dt><dd className="font-semibold text-white">{importDate ? formatPublicDate(importDate) : '—'}</dd></div>
@@ -4531,11 +4607,11 @@ export default function Admin() {
                 value={
                   scheduleCompetitionId
                 }
-                onChange={(e) =>
-                  setScheduleCompetitionId(
-                    e.target.value
-                  )
-                }
+                onChange={(e) => {
+                  setScheduleCompetitionId(e.target.value)
+                  setScheduleTeamId('')
+                  setScheduleTimezone(competitions.find((competition) => String(competition.id) === e.target.value)?.timezone ?? 'America/New_York')
+                }}
                 className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
               >
                 {competitions.map(
@@ -4559,32 +4635,40 @@ export default function Admin() {
               Team:
               <select
                 value={
-                  scheduleTeamName
+                  scheduleTeamId
                 }
                 onChange={(e) =>
-                  setScheduleTeamName(
+                  setScheduleTeamId(
                     e.target.value
                   )
                 }
                 className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
               >
-                {[...new Set(currentTeamRegistrations.filter((team) => team.format === competitions.find((competition) => String(competition.id) === scheduleCompetitionId)?.format).map((team) => team.name))].map((team) => <option key={team} value={team}>{team}</option>)}
+                <option value="">Select verified entry</option>
+                {currentTeamRegistrations.filter((team) =>
+                  team.format === competitions.find((competition) => String(competition.id) === scheduleCompetitionId)?.format &&
+                  competitionEntryLinks.some((entry) => Number(entry.competition_id) === Number(scheduleCompetitionId) && Number(entry.fr_team_id) === Number(team.id))
+                ).map((team) => <option key={team.id} value={team.id}>{team.name} · {team.format}</option>)}
               </select>
             </label>
 
             <label>
-              Opponent:
-              <input
+              Verified opponent:
+              <select
                 value={
-                  scheduleOpponent
+                  scheduleOpponentId
                 }
                 onChange={(e) =>
-                  setScheduleOpponent(
+                  setScheduleOpponentId(
                     e.target.value
                   )
                 }
                 className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
-              />
+              >
+                <option value="">Select canonical opponent</option>
+                {opponentOptions.map((opponent) => <option key={opponent.opponent_id} value={opponent.opponent_id}>{opponent.canonical_name}</option>)}
+              </select>
+              <span className="mt-1 block text-xs text-neutral-500">No free-text fallback. Reconcile uncertain identities in League Directory first.</span>
             </label>
 
             <label>
@@ -4605,8 +4689,9 @@ export default function Admin() {
             </label>
 
             <label>
-              Time:
+              Local time (optional):
               <input
+                type="time"
                 value={
                   scheduleTime
                 }
@@ -4617,6 +4702,47 @@ export default function Admin() {
                 }
                 className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
               />
+            </label>
+
+            <label>
+              Timezone:
+              <input value={scheduleTimezone} onChange={(event) => setScheduleTimezone(event.target.value)} required className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full" />
+            </label>
+
+            <label>
+              Best of:
+              <select value={scheduleBestOf} onChange={(event) => setScheduleBestOf(event.target.value)} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full">
+                <option value="5">BO5</option>
+                <option value="7">BO7</option>
+              </select>
+            </label>
+
+            <label>
+              Phase:
+              <select value={schedulePhase} onChange={(event) => setSchedulePhase(event.target.value as CompetitionPhase)} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full">
+                <option value="regular_season">Regular Season</option>
+                <option value="playoffs">Playoffs</option>
+              </select>
+            </label>
+
+            <label>
+              Stage / round label:
+              <input value={scheduleStage} onChange={(event) => setScheduleStage(event.target.value)} placeholder="Opening Week, Round 1…" className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full" />
+            </label>
+
+            <label>
+              Source provider:
+              <input value={scheduleSourceProvider} onChange={(event) => setScheduleSourceProvider(event.target.value)} placeholder="Rivalry" className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full" />
+            </label>
+
+            <label>
+              Stable source match ID:
+              <input value={scheduleSourceExternalId} onChange={(event) => setScheduleSourceExternalId(event.target.value)} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full" />
+            </label>
+
+            <label>
+              Source URL:
+              <input type="url" value={scheduleSourceUrl} onChange={(event) => setScheduleSourceUrl(event.target.value)} className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full" />
             </label>
 
             <label>
@@ -4676,9 +4802,9 @@ export default function Admin() {
                     {
                       scheduled.match_date
                     }{' '}
-                    {
-                      scheduled.match_time
-                    }{' '}
+                    {scheduled.scheduled_local_time ?? scheduled.match_time ?? 'Time TBD'}{' '}
+                    {(scheduled.scheduled_local_time ?? scheduled.match_time) ? scheduled.timezone : ''}{' '}
+                    · {scheduled.tier ?? 'Tier TBD'} · {scheduled.stage_label ?? 'Round TBD'} · BO{scheduled.best_of ?? '?'} · {scheduled.competition_phase === 'playoffs' ? 'Playoffs' : 'Regular Season'}{' '}
                     (
                     {
                       scheduled.status
@@ -4686,21 +4812,9 @@ export default function Admin() {
                   </span>
 
                   <span className="flex gap-3">
-                    {scheduled.status ===
-                      'scheduled' && (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          markCompleted(
-                            scheduled.scheduled_id
-                          )
-                        }
-                        className="text-sm text-green-400"
-                      >
-                        Mark Completed
-                      </button>
-                    )}
-
+                    <button type="button" onClick={() => editScheduledTime(scheduled)} className="text-sm text-purple-300">
+                      Set time
+                    </button>
                     <button
                       type="button"
                       onClick={() =>
@@ -4713,6 +4827,7 @@ export default function Admin() {
                       Delete
                     </button>
                   </span>
+                  {scheduled.source_url && <a href={scheduled.source_url} target="_blank" rel="noreferrer" className="text-xs text-purple-300 hover:underline">Source ↗</a>}
                 </div>
               )
             )}

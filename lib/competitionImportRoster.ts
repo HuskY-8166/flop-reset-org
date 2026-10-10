@@ -2,6 +2,7 @@ export type CompetitionRosterMember = {
   roster_member_id: number
   display_name_snapshot: string
   league_player_id?: number | null
+  role?: string | null
 }
 
 export type LeaguePlayerLink = {
@@ -33,6 +34,10 @@ function matchesSnapshot(player: CanonicalRosterPlayer, snapshot: string) {
     (player.aliases ?? []).some((alias) => normalize(alias) === target)
 }
 
+function isCompetitiveRosterRole(role?: string | null) {
+  return !['manager', 'coach', 'staff', 'analyst'].includes(normalize(role ?? 'player'))
+}
+
 export function resolveCompetitionImportRoster({
   members,
   leaguePlayers,
@@ -62,7 +67,9 @@ export function resolveCompetitionImportRoster({
   const players: ResolvedImportRosterPlayer[] = []
   const unresolved: Array<{ roster_member_id: number; name: string; reason: string }> = []
 
-  for (const member of members) {
+  const competitiveMembers = members.filter((member) => isCompetitiveRosterRole(member.role))
+
+  for (const member of competitiveMembers) {
     const linkedId = member.league_player_id == null
       ? null
       : linkedPlayerByLeagueId.get(Number(member.league_player_id)) ?? null
@@ -104,5 +111,5 @@ export function resolveCompetitionImportRoster({
     })
   }
 
-  return { players, unresolved, total: members.length }
+  return { players, unresolved, total: competitiveMembers.length }
 }

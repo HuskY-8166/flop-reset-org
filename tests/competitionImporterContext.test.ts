@@ -40,6 +40,7 @@ const frameshiftRoster = resolveCompetitionImportRoster({
     { roster_member_id: 8, display_name_snapshot: 'HuskY', league_player_id: null },
     { roster_member_id: 9, display_name_snapshot: 'drollotov', league_player_id: null },
     { roster_member_id: 10, display_name_snapshot: 'scott', league_player_id: 503 },
+    { roster_member_id: 11, display_name_snapshot: 'Team Manager', league_player_id: null, role: 'manager' },
   ],
   leaguePlayers: [
     { league_player_id: 503, linked_fr_player_id: 12 },
@@ -57,6 +58,7 @@ assert.deepEqual(
   'Frameshift loads exactly its Fall competition roster and preserves stored links',
 )
 assert.deepEqual(frameshiftRoster.unresolved, [])
+assert.equal(frameshiftRoster.total, 3, 'staff registrations are not treated as CSV player slots')
 
 const seasonIsolation = resolveCompetitionImportRoster({
   canonicalTeamId: 3,

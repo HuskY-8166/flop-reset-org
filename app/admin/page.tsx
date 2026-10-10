@@ -814,7 +814,7 @@ export default function Admin() {
 
     const { data: rosterMembers, error: rosterError } = await supabase
       .from('competition_roster_members')
-      .select('roster_member_id, display_name_snapshot, league_player_id')
+      .select('roster_member_id, display_name_snapshot, league_player_id, role')
       .eq('entry_id', entry.entry_id)
       .eq('is_current', true)
       .neq('status', 'removed')

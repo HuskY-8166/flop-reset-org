@@ -49,6 +49,8 @@ const previewWarningsStart = admin.indexOf('const previewWarnings =')
 assert.ok(previewErrorsStart >= 0 && previewWarningsStart > previewErrorsStart)
 assert.doesNotMatch(admin.slice(previewErrorsStart, previewWarningsStart), /fixtureDateWarning/)
 assert.match(admin.slice(previewWarningsStart), /\.\.\.fixtureDateWarning/)
+assert.match(admin, /buildOpponentIdentityIndex\(opponentOptions, opponentAliasOptions\)/)
+assert.match(admin, /importedOpponentIdentity\.opponentId === selectedFixtureOpponentIdentity\.opponentId/)
 
 const publication = readFileSync(fileURLToPath(new URL('../supabase/manual/202610060027_publish_fall_round1_schedule.sql', import.meta.url)), 'utf8')
 assert.match(publication, /\(161::bigint, 'Tier 3'::text\)/)

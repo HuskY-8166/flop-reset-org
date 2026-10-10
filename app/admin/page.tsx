@@ -26,7 +26,7 @@ import {
   type PlayerSummaryRow,
   type TrackingCoverage,
 } from '@/lib/ballchasingImport'
-import { normalizeOpponentName } from '@/lib/opponents'
+import { buildOpponentIdentityIndex, normalizeOpponentName } from '@/lib/opponents'
 import { resolveCompetitionImportRoster } from '@/lib/competitionImportRoster'
 import { competitionEntryOptions, scheduledFixturesForEntry } from '@/lib/competitionImportContext'
 import type { CompetitionPhase } from '@/lib/competitionPhase'
@@ -84,6 +84,12 @@ type CompetitionEntryLink = {
 type OpponentOption = {
   opponent_id: number
   canonical_name: string
+}
+
+type OpponentAliasOption = {
+  opponent_id: number
+  alias: string
+  normalized_alias?: string | null
 }
 
 type Game = {
@@ -619,6 +625,7 @@ export default function Admin() {
   ] = useState<any[]>([])
 
   const [opponentOptions, setOpponentOptions] = useState<OpponentOption[]>([])
+  const [opponentAliasOptions, setOpponentAliasOptions] = useState<OpponentAliasOption[]>([])
 
   // ---------------------------------------------------------------------------
   // Power Rankings
@@ -1153,7 +1160,7 @@ export default function Admin() {
       setTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
       setScheduleTeamId((current) => registrations.some((team) => String(team.id) === current) ? current : String(currentRegistrations[0]?.id ?? registrations[0]?.id ?? ''))
 
-      const [playoffResult, entryResult, opponentResult] = await Promise.all([
+      const [playoffResult, entryResult, opponentResult, opponentAliasResult] = await Promise.all([
         supabase
           .from('playoff_matches')
           .select('playoff_match_id, bracket_id, round_name, team_a_name, team_b_name, flop_reset_team_a_id, flop_reset_team_b_id, opponent_a_id, opponent_b_id, competition_entry_a_id, competition_entry_b_id, best_of, is_bye, is_forfeit, series_id, playoff_brackets!inner(competition_id, tier, name)')
@@ -1165,14 +1172,19 @@ export default function Admin() {
           .from('opponents')
           .select('opponent_id, canonical_name')
           .order('canonical_name'),
+        supabase
+          .from('opponent_aliases')
+          .select('opponent_id, alias, normalized_alias'),
       ])
       if (playoffResult.error) console.error(playoffResult.error)
       if (entryResult.error) console.error(entryResult.error)
       if (opponentResult.error) console.error(opponentResult.error)
+      if (opponentAliasResult.error) console.error(opponentAliasResult.error)
       setPlayoffImportTargets((playoffResult.data ?? []) as unknown as PlayoffImportTarget[])
       const entries = (entryResult.data ?? []) as CompetitionEntryLink[]
       setCompetitionEntryLinks(entries)
       setOpponentOptions((opponentResult.data ?? []) as OpponentOption[])
+      setOpponentAliasOptions((opponentAliasResult.data ?? []) as OpponentAliasOption[])
 
       if (list.length) {
         const firstId =
@@ -3744,6 +3756,19 @@ export default function Admin() {
   const selectedScheduledOpponent = selectedScheduledMatch
     ? opponentOptions.find((row) => Number(row.opponent_id) === Number(selectedScheduledMatch.opponent_id))
     : null
+  const opponentIdentityIndex = buildOpponentIdentityIndex(opponentOptions, opponentAliasOptions)
+  const importedOpponentIdentity = importOpponent ? opponentIdentityIndex.find(importOpponent) : null
+  const selectedFixtureOpponentIdentity = selectedScheduledMatch
+    ? opponentIdentityIndex.resolve({
+        opponentId: selectedScheduledMatch.opponent_id,
+        snapshotName: selectedScheduledOpponent?.canonical_name ?? selectedScheduledMatch.opponent_name,
+      })
+    : null
+  const selectedFixtureOpponentMatches = !selectedScheduledMatch || (
+    importedOpponentIdentity && selectedFixtureOpponentIdentity
+      ? importedOpponentIdentity.opponentId === selectedFixtureOpponentIdentity.opponentId
+      : normalizeOpponentName(importOpponent) === normalizeOpponentName(selectedScheduledOpponent?.canonical_name ?? selectedScheduledMatch.opponent_name)
+  )
   const fixtureDateWarning = selectedScheduledMatch && importDate !== selectedScheduledMatch.match_date
     ? ['Selected fixture date differs from the imported series date. The linked fixture will be preserved.']
     : []
@@ -3756,7 +3781,7 @@ export default function Admin() {
     ...(!importDate ? ['Series date is missing.'] : []),
     ...(!bestOfValid ? ['A valid odd best-of value is required.'] : []),
     ...(importSeriesType === 'playoffs' && !selectedPlayoffTarget ? ['A playoff match is required for a playoff import.'] : []),
-    ...(selectedScheduledMatch && normalizeOpponentName(importOpponent) !== normalizeOpponentName(selectedScheduledOpponent?.canonical_name ?? selectedScheduledMatch.opponent_name) ? ['Selected fixture opponent does not match the CSV opponent.'] : []),
+    ...(!selectedFixtureOpponentMatches ? ['Selected fixture opponent does not match the CSV opponent.'] : []),
     ...(selectedScheduledMatch && Number(selectedScheduledMatch.best_of) !== intendedBestOf ? ['Selected fixture best-of does not match the import.'] : []),
   ] : [...playersSummaryErrors, ...importValidation.errors]
   const previewWarnings = [...importValidation.warnings, ...fixtureDateWarning]

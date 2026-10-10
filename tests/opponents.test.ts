@@ -5,10 +5,12 @@ const index = buildOpponentIdentityIndex(
   [
     { opponent_id: 9, canonical_name: 'Ohio Midlads' },
     { opponent_id: 7, canonical_name: 'SBC Blue Angels' },
+    { opponent_id: 3, canonical_name: 'KUNGFU TREACHERY' },
   ],
   [
     { opponent_id: 9, alias: 'MIDLADS', normalized_alias: 'midlads' },
     { opponent_id: 7, alias: 'SBC Angels', normalized_alias: 'sbc angels' },
+    { opponent_id: 3, alias: 'TREACHERY', normalized_alias: 'treachery' },
   ],
 )
 
@@ -16,5 +18,10 @@ assert.equal(index.find('MIDLADS')?.canonicalName, 'Ohio Midlads')
 assert.equal(index.resolve({ opponentId: 9, snapshotName: 'MIDLADS' })?.canonicalName, 'Ohio Midlads')
 assert.equal(index.find('SBC Angels')?.canonicalName, 'SBC Blue Angels')
 assert.deepEqual(index.find('Ohio Midlads')?.aliases, ['MIDLADS'])
+assert.equal(index.find('TREACHERY')?.opponentId, 3)
+assert.equal(
+  index.find('TREACHERY')?.opponentId,
+  index.resolve({ opponentId: 3, snapshotName: 'Kung-Fu Treachery' })?.opponentId,
+)
 
 console.log('Opponent identity tests passed.')

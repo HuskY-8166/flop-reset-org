@@ -71,6 +71,28 @@ const seasonIsolation = resolveCompetitionImportRoster({
 assert.deepEqual(seasonIsolation.players, [], 'another canonical team cannot supply a Fall roster identity')
 assert.deepEqual(seasonIsolation.unresolved.map((member) => member.name), ['New Fall Player'])
 
+const explicitCrossTeamRosterLink = resolveCompetitionImportRoster({
+  canonicalTeamId: 8,
+  members: [
+    { roster_member_id: 19, display_name_snapshot: 'HuskY', league_player_id: 700 },
+    { roster_member_id: 20, display_name_snapshot: 'drollotov', league_player_id: 701 },
+  ],
+  leaguePlayers: [
+    { league_player_id: 700, linked_fr_player_id: 11 },
+    { league_player_id: 701, linked_fr_player_id: 10 },
+  ],
+  teamPlayers: [
+    { player_id: 11, name: 'HuskY', aliases: ['HuskY.G2'], team_id: 3 },
+    { player_id: 10, name: 'droll', aliases: ['Drollotov'], team_id: 3 },
+  ],
+})
+assert.deepEqual(
+  explicitCrossTeamRosterLink.players.map((player) => [player.name, player.player_id]),
+  [['HuskY', 11], ['drollotov', 10]],
+  'an explicit competition-roster identity link may reuse a player across canonical teams',
+)
+assert.deepEqual(explicitCrossTeamRosterLink.unresolved, [])
+
 const fixtures = [
   { scheduled_id: 14, competition_id: 4, competition_entry_id: 163, flop_reset_team_id: 3, competition_phase: 'regular_season', status: 'scheduled' },
   { scheduled_id: 99, competition_id: 4, competition_entry_id: 120, flop_reset_team_id: 3, competition_phase: 'regular_season', status: 'scheduled' },

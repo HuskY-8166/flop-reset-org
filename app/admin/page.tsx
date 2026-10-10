@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, react-hooks/set-state-in-effect, react-hooks/exhaustive-deps */
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Papa from 'papaparse'
@@ -522,6 +522,7 @@ export default function Admin() {
 
   const [rosterMemberCount, setRosterMemberCount] = useState(0)
   const [unresolvedRosterMembers, setUnresolvedRosterMembers] = useState<string[]>([])
+  const rosterRequestRef = useRef(0)
 
   const [importMessage, setImportMessage] =
     useState('')
@@ -787,13 +788,15 @@ export default function Admin() {
     selectedEntryId: string,
     selectedCompetitionId: string
   ) {
+    const requestId = ++rosterRequestRef.current
+    setRosterPlayers([])
+    setRosterMemberCount(0)
+    setUnresolvedRosterMembers([])
+
     if (
       !selectedEntryId ||
       !selectedCompetitionId
     ) {
-      setRosterPlayers([])
-      setRosterMemberCount(0)
-      setUnresolvedRosterMembers([])
       return
     }
 
@@ -805,10 +808,9 @@ export default function Admin() {
       .not('fr_team_id', 'is', null)
       .maybeSingle()
 
+    if (requestId !== rosterRequestRef.current) return
+
     if (entryError || !entry) {
-      setRosterPlayers([])
-      setRosterMemberCount(0)
-      setUnresolvedRosterMembers([])
       return
     }
 
@@ -819,10 +821,9 @@ export default function Admin() {
       .eq('is_current', true)
       .neq('status', 'removed')
 
+    if (requestId !== rosterRequestRef.current) return
+
     if (rosterError || !rosterMembers?.length) {
-      setRosterPlayers([])
-      setRosterMemberCount(0)
-      setUnresolvedRosterMembers([])
       return
     }
 
@@ -831,27 +832,48 @@ export default function Admin() {
       ? await supabase.from('league_players').select('league_player_id, linked_fr_player_id').in('league_player_id', leaguePlayerIds)
       : { data: [], error: null }
     if (leaguePlayerError) {
-      setRosterPlayers([])
       return
     }
 
-    const { data: players, error: playerError } = await supabase
-      .from('players')
-      .select('player_id, name, aliases, team_id')
-      .eq('team_id', entry.fr_team_id)
+    const linkedCanonicalPlayerIds = (leaguePlayers ?? [])
+      .map((player) => Number(player.linked_fr_player_id))
+      .filter(Number.isFinite)
+    const [{ data: teamPlayers, error: teamPlayerError }, { data: linkedPlayers, error: linkedPlayerError }] = await Promise.all([
+      supabase
+        .from('players')
+        .select('player_id, name, aliases, team_id')
+        .eq('team_id', entry.fr_team_id),
+      linkedCanonicalPlayerIds.length
+        ? supabase
+          .from('players')
+          .select('player_id, name, aliases, team_id')
+          .in('player_id', linkedCanonicalPlayerIds)
+        : Promise.resolve({ data: [], error: null }),
+    ])
+
+    if (requestId !== rosterRequestRef.current) return
+
+    const playerError = teamPlayerError ?? linkedPlayerError
     if (playerError) {
-      setRosterPlayers([])
       setRosterMemberCount(rosterMembers.length)
       setUnresolvedRosterMembers(rosterMembers.map((member) => member.display_name_snapshot))
       return
     }
 
+    const players = [...new Map([
+      ...(teamPlayers ?? []),
+      ...(linkedPlayers ?? []),
+    ].map((player) => [Number(player.player_id), player])).values()]
+
     const resolved = resolveCompetitionImportRoster({
       members: rosterMembers,
       leaguePlayers: leaguePlayers ?? [],
-      teamPlayers: players ?? [],
+      teamPlayers: players,
       canonicalTeamId: Number(entry.fr_team_id),
     })
+
+    if (requestId !== rosterRequestRef.current) return
+
     setRosterPlayers(resolved.players)
     setRosterMemberCount(resolved.total)
     setUnresolvedRosterMembers(resolved.unresolved.map((member) => member.name))
@@ -1229,6 +1251,7 @@ export default function Admin() {
   }
 
   function clearImportPreview() {
+    setImportMessage('')
     setPlayersSummaryFile('')
     setPlayersSummaryRows([])
     setPlayersSummaryCoverage({ total: 0, basic: 0, movement: 0, positioning: 0, zeroBoost: 0 })

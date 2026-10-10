@@ -53,7 +53,7 @@ export function resolveCompetitionImportRoster({
     (player) => Number(player.team_id) === Number(canonicalTeamId),
   )
   const playerById = new Map(
-    eligiblePlayers.map((player) => [Number(player.player_id), player]),
+    teamPlayers.map((player) => [Number(player.player_id), player]),
   )
   const linkedPlayerByLeagueId = new Map(
     leaguePlayers.flatMap((player) => {

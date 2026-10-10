@@ -27,6 +27,8 @@ import {
   type TrackingCoverage,
 } from '@/lib/ballchasingImport'
 import { normalizeOpponentName } from '@/lib/opponents'
+import { resolveCompetitionImportRoster } from '@/lib/competitionImportRoster'
+import { competitionEntryOptions, scheduledFixturesForEntry } from '@/lib/competitionImportContext'
 import type { CompetitionPhase } from '@/lib/competitionPhase'
 
 type Competition = {
@@ -75,6 +77,8 @@ type CompetitionEntryLink = {
   opponent_id: number | null
   display_name_snapshot: string
   tier: string | null
+  status?: string | null
+  registration_status?: string | null
 }
 
 type OpponentOption = {
@@ -474,8 +478,8 @@ export default function Admin() {
     setImportCompetitionId,
   ] = useState('')
 
-  const [importTeam, setImportTeam] =
-    useState('Frameshift')
+  const [importEntryId, setImportEntryId] =
+    useState('')
 
   const [importOpponent, setImportOpponent] =
     useState('')
@@ -501,6 +505,10 @@ export default function Admin() {
   const [competitionEntryLinks, setCompetitionEntryLinks] =
     useState<CompetitionEntryLink[]>([])
 
+  const importEntry = competitionEntryLinks.find((entry) => String(entry.entry_id) === importEntryId)
+  const importCanonicalTeam = teamRegistrations.find((team) => Number(team.id) === Number(importEntry?.fr_team_id))
+  const importTeam = importEntry?.display_name_snapshot ?? importCanonicalTeam?.name ?? ''
+
   const [games, setGames] =
     useState<Game[]>([])
 
@@ -511,6 +519,9 @@ export default function Admin() {
     rosterPlayers,
     setRosterPlayers,
   ] = useState<RosterPlayer[]>([])
+
+  const [rosterMemberCount, setRosterMemberCount] = useState(0)
+  const [unresolvedRosterMembers, setUnresolvedRosterMembers] = useState<string[]>([])
 
   const [importMessage, setImportMessage] =
     useState('')
@@ -773,84 +784,45 @@ export default function Admin() {
   }
 
   async function loadRoster(
-    team: string,
+    selectedEntryId: string,
     selectedCompetitionId: string
   ) {
     if (
-      !team ||
+      !selectedEntryId ||
       !selectedCompetitionId
     ) {
       setRosterPlayers([])
-      return
-    }
-
-    const competition =
-      competitions.find(
-        (c) =>
-          String(c.id) ===
-          String(selectedCompetitionId)
-      )
-
-    let format =
-      competition?.format
-
-    if (!format) {
-      const { data } =
-        await supabase
-          .from('competitions')
-          .select('format')
-          .eq(
-            'id',
-            selectedCompetitionId
-          )
-          .single()
-
-      format = data?.format
-    }
-
-    if (!format) {
-      setRosterPlayers([])
-      return
-    }
-
-    const {
-      data: teamRow,
-      error: teamError,
-    } = await supabase
-      .from('teams')
-      .select('id')
-      .eq('name', team)
-      .eq('format', format)
-      .single()
-
-    if (
-      teamError ||
-      !teamRow
-    ) {
-      setRosterPlayers([])
+      setRosterMemberCount(0)
+      setUnresolvedRosterMembers([])
       return
     }
 
     const { data: entry, error: entryError } = await supabase
       .from('competition_entries')
-      .select('entry_id')
+      .select('entry_id, fr_team_id')
+      .eq('entry_id', selectedEntryId)
       .eq('competition_id', selectedCompetitionId)
-      .eq('fr_team_id', teamRow.id)
+      .not('fr_team_id', 'is', null)
       .maybeSingle()
 
     if (entryError || !entry) {
       setRosterPlayers([])
+      setRosterMemberCount(0)
+      setUnresolvedRosterMembers([])
       return
     }
 
     const { data: rosterMembers, error: rosterError } = await supabase
       .from('competition_roster_members')
-      .select('display_name_snapshot, league_player_id')
+      .select('roster_member_id, display_name_snapshot, league_player_id')
       .eq('entry_id', entry.entry_id)
       .eq('is_current', true)
+      .neq('status', 'removed')
 
     if (rosterError || !rosterMembers?.length) {
       setRosterPlayers([])
+      setRosterMemberCount(0)
+      setUnresolvedRosterMembers([])
       return
     }
 
@@ -863,27 +835,26 @@ export default function Admin() {
       return
     }
 
-    const linkedPlayerByLeagueId = new Map((leaguePlayers ?? []).map((player) => [Number(player.league_player_id), Number(player.linked_fr_player_id)]))
-    const linkedPlayerIds = [...new Set([...linkedPlayerByLeagueId.values()].filter(Number.isFinite))]
-    const { data: players, error: playerError } = linkedPlayerIds.length
-      ? await supabase.from('players').select('player_id, name, aliases').in('player_id', linkedPlayerIds)
-      : { data: [], error: null }
+    const { data: players, error: playerError } = await supabase
+      .from('players')
+      .select('player_id, name, aliases, team_id')
+      .eq('team_id', entry.fr_team_id)
     if (playerError) {
       setRosterPlayers([])
+      setRosterMemberCount(rosterMembers.length)
+      setUnresolvedRosterMembers(rosterMembers.map((member) => member.display_name_snapshot))
       return
     }
 
-    const playerById = new Map((players ?? []).map((player) => [Number(player.player_id), player]))
-    setRosterPlayers(rosterMembers.flatMap((member) => {
-      const linkedPlayerId = linkedPlayerByLeagueId.get(Number(member.league_player_id))
-      const player = linkedPlayerId ? playerById.get(linkedPlayerId) : null
-      if (!player) return []
-      return [{
-        player_id: player.player_id,
-        name: member.display_name_snapshot,
-        aliases: [...new Set([player.name, ...(player.aliases ?? [])].filter((alias) => alias !== member.display_name_snapshot))],
-      }]
-    }))
+    const resolved = resolveCompetitionImportRoster({
+      members: rosterMembers,
+      leaguePlayers: leaguePlayers ?? [],
+      teamPlayers: players ?? [],
+      canonicalTeamId: Number(entry.fr_team_id),
+    })
+    setRosterPlayers(resolved.players)
+    setRosterMemberCount(resolved.total)
+    setUnresolvedRosterMembers(resolved.unresolved.map((member) => member.name))
   }
 
   async function loadManageData() {
@@ -1158,7 +1129,6 @@ export default function Admin() {
       const currentRegistrations = registrations.filter((team) => team.active !== false)
       const firstTeam = currentRegistrations[0]?.name ?? registrations[0]?.name ?? ''
       setTeamName((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
-      setImportTeam((current) => registrations.some((team) => team.name === current) ? current : firstTeam)
       setScheduleTeamId((current) => registrations.some((team) => String(team.id) === current) ? current : String(currentRegistrations[0]?.id ?? registrations[0]?.id ?? ''))
 
       const [playoffResult, entryResult, opponentResult] = await Promise.all([
@@ -1168,7 +1138,7 @@ export default function Admin() {
           .order('playoff_match_id'),
         supabase
           .from('competition_entries')
-          .select('entry_id, competition_id, fr_team_id, opponent_id, display_name_snapshot, tier'),
+          .select('entry_id, competition_id, fr_team_id, opponent_id, display_name_snapshot, tier, status, registration_status'),
         supabase
           .from('opponents')
           .select('opponent_id, canonical_name')
@@ -1178,7 +1148,8 @@ export default function Admin() {
       if (entryResult.error) console.error(entryResult.error)
       if (opponentResult.error) console.error(opponentResult.error)
       setPlayoffImportTargets((playoffResult.data ?? []) as unknown as PlayoffImportTarget[])
-      setCompetitionEntryLinks((entryResult.data ?? []) as CompetitionEntryLink[])
+      const entries = (entryResult.data ?? []) as CompetitionEntryLink[]
+      setCompetitionEntryLinks(entries)
       setOpponentOptions((opponentResult.data ?? []) as OpponentOption[])
 
       if (list.length) {
@@ -1191,7 +1162,14 @@ export default function Admin() {
             team.name === 'Frameshift' && team.format === competition.format
           )
         )
-        setImportCompetitionId(String(importDefault?.id ?? list[0].id))
+        const defaultImportCompetitionId = importDefault?.id ?? list[0].id
+        setImportCompetitionId(String(defaultImportCompetitionId))
+        setImportEntryId(String(entries.find((entry) =>
+          Number(entry.competition_id) === Number(defaultImportCompetitionId) &&
+          entry.fr_team_id &&
+          entry.status !== 'withdrawn' &&
+          entry.registration_status !== 'withdrawn'
+        )?.entry_id ?? ''))
         setScheduleCompetitionId(firstId)
         setScheduleTimezone(list[0].timezone ?? 'America/New_York')
         setPrCompetitionId(firstId)
@@ -1229,12 +1207,12 @@ export default function Admin() {
       importCompetitionId
     ) {
       loadRoster(
-        importTeam,
+        importEntryId,
         importCompetitionId
       )
     }
   }, [
-    importTeam,
+    importEntryId,
     importCompetitionId,
     competitions,
   ])
@@ -1283,12 +1261,12 @@ export default function Admin() {
 
   async function getImportContext(
     selectedCompetitionId = importCompetitionId,
-    selectedTeam = importTeam
+    selectedEntryId = importEntryId
   ) {
-    return resolveCompetitionTeam(selectedCompetitionId, selectedTeam)
+    return resolveCompetitionTeam(selectedCompetitionId, selectedEntryId)
   }
 
-  async function resolveCompetitionTeam(selectedCompetitionId: string, selectedTeam: string) {
+  async function resolveCompetitionTeam(selectedCompetitionId: string, selectedEntryId: string) {
     const { data: competition, error: competitionError } = await supabase
       .from('competitions')
       .select('id, name, format')
@@ -1297,21 +1275,21 @@ export default function Admin() {
 
     if (competitionError || !competition) throw new Error('Competition not found.')
 
-    const { data: candidates, error: teamError } = await supabase
-      .from('teams')
-      .select('id, name, format')
-      .eq('name', selectedTeam)
-      .order('id')
+    const { data: entry, error: entryError } = await supabase
+      .from('competition_entries')
+      .select('entry_id, competition_id, fr_team_id, display_name_snapshot, teams(id, name, format)')
+      .eq('entry_id', selectedEntryId)
+      .eq('competition_id', selectedCompetitionId)
+      .not('fr_team_id', 'is', null)
+      .single()
 
-    if (teamError) throw new Error(teamError.message)
-    const team = candidates?.find((candidate) => candidate.format === competition.format)
-    if (!team) {
-      const mismatched = candidates?.[0]
-      if (mismatched) throw new Error(`${mismatched.name} (${mismatched.format}) cannot be entered into a ${competition.format} competition.`)
-      throw new Error(`${selectedTeam} is not a registered Flop Reset squad.`)
+    if (entryError || !entry) throw new Error('Select a registered competition entry.')
+    const team = Array.isArray(entry.teams) ? entry.teams[0] : entry.teams
+    if (!team || team.format !== competition.format) {
+      throw new Error('Competition entry format does not match its canonical team.')
     }
 
-    return { competition, team }
+    return { competition, team, entry }
   }
 
   function statRowsMatch(
@@ -1732,7 +1710,7 @@ export default function Admin() {
     importOpponent,
     importDate,
     importCompetitionId,
-    importTeam,
+    importEntryId,
     importValidation.errors.length,
   ])
 
@@ -1761,10 +1739,13 @@ export default function Admin() {
     }
 
     if (
-      rosterPlayers.length === 0
+      rosterPlayers.length === 0 ||
+      unresolvedRosterMembers.length > 0
     ) {
       setImportMessage(
-        'No roster players were found for this team and format.'
+        unresolvedRosterMembers.length
+          ? `Competition roster identities must be reconciled before import: ${unresolvedRosterMembers.join(', ')}.`
+          : 'No roster players were found for this competition entry.'
       )
       return
     }
@@ -1919,8 +1900,10 @@ export default function Admin() {
       return
     }
 
-    if (rosterPlayers.length === 0) {
-      setImportMessage('No roster players were found for this team and format.')
+    if (rosterPlayers.length === 0 || unresolvedRosterMembers.length > 0) {
+      setImportMessage(unresolvedRosterMembers.length
+        ? `Competition roster identities must be reconciled before import: ${unresolvedRosterMembers.join(', ')}.`
+        : 'No roster players were found for this competition entry.')
       return
     }
 
@@ -3710,25 +3693,17 @@ export default function Admin() {
     (competition) => String(competition.id) === importCompetitionId
   )
   const currentTeamRegistrations = teamRegistrations.filter((team) => team.active !== false)
-  const selectedTeamFormats = new Set(
-    teamRegistrations
-      .filter((team) => team.name === importTeam)
-      .map((team) => team.format)
+  const compatibleImportCompetitions = competitions
+  const compatibleImportEntries = competitionEntryOptions(
+    competitionEntryLinks,
+    importCompetitionId,
   )
-  const compatibleImportCompetitions = competitions.filter(
-    (competition) => selectedTeamFormats.size === 0 || selectedTeamFormats.has(competition.format)
-  )
-  const compatibleImportTeams = [...new Set(
-    teamRegistrations
-      .filter((team) => team.format === selectedImportCompetition?.format)
-      .map((team) => team.name)
-  )]
   const intendedBestOf = Number(importBestOf)
   const bestOfValid = Number.isInteger(intendedBestOf) &&
     intendedBestOf >= games.length && intendedBestOf > 0 && intendedBestOf % 2 === 1
-  const targetRegistration = teamRegistrations.find(
-    (team) => team.name === importTeam && team.format === selectedImportCompetition?.format
-  )
+  const targetRegistration = importCanonicalTeam && importCanonicalTeam.format === selectedImportCompetition?.format
+    ? importCanonicalTeam
+    : undefined
   const selectedPlayoffTarget = playoffImportTargets.find(
     (row) => String(row.playoff_match_id) === importPlayoffMatchId
   )
@@ -3736,12 +3711,12 @@ export default function Admin() {
     Number(row.playoff_brackets?.competition_id) === Number(importCompetitionId) &&
     !row.series_id && !row.is_bye && !row.is_forfeit
   )
-  const compatibleScheduledMatches = scheduledList.filter((row) =>
-    row.status === 'scheduled' &&
-    Number(row.competition_id) === Number(importCompetitionId) &&
-    Number(row.flop_reset_team_id) === Number(targetRegistration?.id) &&
-    row.competition_phase === importSeriesType
-  )
+  const compatibleScheduledMatches = scheduledFixturesForEntry(scheduledList, {
+    competitionId: importCompetitionId,
+    entryId: importEntryId,
+    canonicalTeamId: targetRegistration?.id ?? '',
+    phase: importSeriesType,
+  })
   const selectedScheduledMatch = compatibleScheduledMatches.find((row) => String(row.scheduled_id) === importScheduledMatchId)
   const selectedScheduledOpponent = selectedScheduledMatch
     ? opponentOptions.find((row) => Number(row.opponent_id) === Number(selectedScheduledMatch.opponent_id))
@@ -4185,9 +4160,13 @@ export default function Admin() {
                 importCompetitionId
               }
               onChange={(e) => {
-                setImportCompetitionId(
-                  e.target.value
-                )
+                setImportCompetitionId(e.target.value)
+                setImportEntryId(String(competitionEntryLinks.find((entry) =>
+                  Number(entry.competition_id) === Number(e.target.value) &&
+                  entry.fr_team_id &&
+                  entry.status !== 'withdrawn' &&
+                  entry.registration_status !== 'withdrawn'
+                )?.entry_id ?? ''))
                 setImportScheduledMatchId('')
                 clearImportPreview()
               }}
@@ -4214,10 +4193,10 @@ export default function Admin() {
             Team:
             <select
               value={
-                importTeam
+                importEntryId
               }
               onChange={(e) => {
-                setImportTeam(
+                setImportEntryId(
                   e.target.value
                 )
                 setImportScheduledMatchId('')
@@ -4225,22 +4204,23 @@ export default function Admin() {
               }}
               className="block mt-1 bg-neutral-900 border border-neutral-700 rounded p-2 w-full"
             >
-              {compatibleImportTeams.map((team) => (
-                <option key={team} value={team}>{team}</option>
+              {compatibleImportEntries.map((entry) => (
+                <option key={entry.entry_id} value={entry.entry_id}>{entry.display_name_snapshot}</option>
               ))}
             </select>
           </label>
 
-          <div className="text-xs text-neutral-500 mb-4">
+          <div className={`text-xs mb-4 ${unresolvedRosterMembers.length ? 'text-amber-300' : 'text-neutral-500'}`}>
             Roster loaded:{' '}
-            {
-              rosterPlayers.length
-            }{' '}
+            {rosterPlayers.length}/{rosterMemberCount}{' '}
             player
-            {rosterPlayers.length ===
+            {rosterMemberCount ===
             1
               ? ''
               : 's'}
+            {unresolvedRosterMembers.length > 0 && (
+              <> · unresolved: {unresolvedRosterMembers.join(', ')}</>
+            )}
           </div>
 
           <label className="block mb-6 rounded-xl border border-purple-900 bg-purple-950/10 p-4">

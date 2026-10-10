@@ -3744,6 +3744,9 @@ export default function Admin() {
   const selectedScheduledOpponent = selectedScheduledMatch
     ? opponentOptions.find((row) => Number(row.opponent_id) === Number(selectedScheduledMatch.opponent_id))
     : null
+  const fixtureDateWarning = selectedScheduledMatch && importDate !== selectedScheduledMatch.match_date
+    ? ['Selected fixture date differs from the imported series date. The linked fixture will be preserved.']
+    : []
   const previewErrors = games.length ? [
     ...playersSummaryErrors,
     ...importValidation.errors,
@@ -3754,9 +3757,9 @@ export default function Admin() {
     ...(!bestOfValid ? ['A valid odd best-of value is required.'] : []),
     ...(importSeriesType === 'playoffs' && !selectedPlayoffTarget ? ['A playoff match is required for a playoff import.'] : []),
     ...(selectedScheduledMatch && normalizeOpponentName(importOpponent) !== normalizeOpponentName(selectedScheduledOpponent?.canonical_name ?? selectedScheduledMatch.opponent_name) ? ['Selected fixture opponent does not match the CSV opponent.'] : []),
-    ...(selectedScheduledMatch && importDate !== selectedScheduledMatch.match_date ? ['Selected fixture date does not match the imported series date.'] : []),
     ...(selectedScheduledMatch && Number(selectedScheduledMatch.best_of) !== intendedBestOf ? ['Selected fixture best-of does not match the import.'] : []),
   ] : [...playersSummaryErrors, ...importValidation.errors]
+  const previewWarnings = [...importValidation.warnings, ...fixtureDateWarning]
   const safeToImport = games.length > 0 && previewErrors.length === 0 &&
     (importMode === 'new' || importMode === 'backfill')
   const rebuildReady = !rebuildHealth.loading && !rebuildHealth.error &&
@@ -4376,9 +4379,9 @@ export default function Admin() {
                 <div className={`rounded-lg border p-4 ${unresolvedPlayers.length ? 'border-red-900 bg-red-950/20' : 'border-neutral-800 bg-neutral-950/50'}`}><div className={`text-xs font-black uppercase ${unresolvedPlayers.length ? 'text-red-400' : 'text-neutral-400'}`}>Unresolved / Requires Review</div><div className="mt-2 text-sm text-neutral-300">{unresolvedPlayers.length ? unresolvedPlayers.join(', ') : 'None'}</div></div>
               </section>
 
-              {(previewErrors.length > 0 || importValidation.warnings.length > 0) && <section className="mb-6 space-y-3">
+              {(previewErrors.length > 0 || previewWarnings.length > 0) && <section className="mb-6 space-y-3">
                 {previewErrors.length > 0 && <div className="rounded-lg border border-red-900 bg-red-950/20 p-4"><div className="text-sm font-black text-red-400">Import blocked</div><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-red-200">{previewErrors.map((error) => <li key={error}>{error}</li>)}</ul></div>}
-                {importValidation.warnings.length > 0 && <div className="rounded-lg border border-amber-900 bg-amber-950/15 p-4"><div className="text-sm font-black text-amber-300">Warnings</div><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-100">{importValidation.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}
+                {previewWarnings.length > 0 && <div className="rounded-lg border border-amber-900 bg-amber-950/15 p-4"><div className="text-sm font-black text-amber-300">Warnings</div><ul className="mt-2 list-disc space-y-1 pl-5 text-xs text-amber-100">{previewWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}
               </section>}
 
               <label className="block mb-4">

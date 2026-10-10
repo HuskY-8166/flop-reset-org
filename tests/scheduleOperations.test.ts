@@ -44,6 +44,11 @@ const admin = readFileSync(fileURLToPath(new URL('../app/admin/page.tsx', import
 assert.match(admin, /scheduled_match_id:\s*selectedScheduledMatch/)
 assert.match(admin, /create_verified_scheduled_match/)
 assert.doesNotMatch(admin, /function markCompleted/)
+const previewErrorsStart = admin.indexOf('const previewErrors =')
+const previewWarningsStart = admin.indexOf('const previewWarnings =')
+assert.ok(previewErrorsStart >= 0 && previewWarningsStart > previewErrorsStart)
+assert.doesNotMatch(admin.slice(previewErrorsStart, previewWarningsStart), /fixtureDateWarning/)
+assert.match(admin.slice(previewWarningsStart), /\.\.\.fixtureDateWarning/)
 
 const publication = readFileSync(fileURLToPath(new URL('../supabase/manual/202610060027_publish_fall_round1_schedule.sql', import.meta.url)), 'utf8')
 assert.match(publication, /\(161::bigint, 'Tier 3'::text\)/)

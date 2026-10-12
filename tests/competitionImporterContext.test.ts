@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { competitionEntryOptions, scheduledFixturesForEntry } from '../lib/competitionImportContext.ts'
 import { resolveCompetitionImportRoster } from '../lib/competitionImportRoster.ts'
 
@@ -107,6 +109,21 @@ assert.deepEqual(
   }).map((fixture) => fixture.scheduled_id),
   [14],
   'fixture lookup is scoped to the exact Fall competition entry',
+)
+
+const adminSource = readFileSync(
+  fileURLToPath(new URL('../app/admin/page.tsx', import.meta.url)),
+  'utf8',
+)
+assert.match(adminSource, /const \[isImporting, setIsImporting\]/, 'the importer exposes an in-progress state')
+assert.match(adminSource, /disabled=\{!safeToImport \|\| isImporting\}/, 'the confirm button blocks duplicate clicks while saving')
+assert.match(adminSource, /aria-busy=\{isImporting\}/, 'the confirm button communicates its busy state')
+assert.match(adminSource, /\{isImporting \? 'Importing…' : 'Confirm New Import'\}/, 'the button visibly acknowledges a click')
+assert.match(adminSource, /role="status"[\s\S]*aria-live="polite"/, 'the final import result is announced beside the confirm button')
+assert.match(
+  adminSource,
+  /clearImportPreview\(\)\s+setImportMessage\(successMessage\)/,
+  'the success message is restored after clearing the completed preview',
 )
 
 console.log('competition importer context tests passed')

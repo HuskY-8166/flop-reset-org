@@ -533,6 +533,9 @@ export default function Admin() {
   const [importMessage, setImportMessage] =
     useState('')
 
+  const [isImporting, setIsImporting] =
+    useState(false)
+
   const [resolvedPlayers, setResolvedPlayers] = useState<PlayerMapping[]>([])
   const [opponentPlayers, setOpponentPlayers] = useState<string[]>([])
   const [unresolvedPlayers, setUnresolvedPlayers] = useState<string[]>([])
@@ -2515,6 +2518,10 @@ export default function Admin() {
   // ---------------------------------------------------------------------------
 
   async function handleNewImport() {
+    if (isImporting) {
+      return
+    }
+
     if (
       importMode !==
       'new' ||
@@ -2545,6 +2552,7 @@ export default function Admin() {
     setImportMessage(
       'Saving new series...'
     )
+    setIsImporting(true)
 
     try {
       const {
@@ -2786,9 +2794,8 @@ export default function Admin() {
           }
         }
 
-        setImportMessage(
+        const successMessage =
           `Successfully imported ${games.length} new game(s) and ${playerStats.length} player-stat rows.`
-        )
 
         if (playoffTarget) {
           const { error: linkError } = await supabase
@@ -2817,7 +2824,8 @@ export default function Admin() {
 
         await loadRebuildHealth()
         clearImportPreview()
-        loadManageData()
+        setImportMessage(successMessage)
+        await loadManageData()
       } catch (error) {
         const {
           data: createdMatches,
@@ -2869,6 +2877,8 @@ export default function Admin() {
       setImportMessage(
         `Import failed: ${error.message}`
       )
+    } finally {
+      setIsImporting(false)
     }
   }
 
@@ -4574,15 +4584,35 @@ export default function Admin() {
 
               {importMode ===
                 'new' && (
-                <button
-                  onClick={
-                    handleNewImport
-                  }
-                  disabled={!safeToImport}
-                  className="mt-2 rounded bg-purple-700 px-4 py-2 text-white enabled:hover:bg-purple-600 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
-                >
-                  Confirm New Import
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={
+                      handleNewImport
+                    }
+                    disabled={!safeToImport || isImporting}
+                    aria-busy={isImporting}
+                    className="mt-2 rounded bg-purple-700 px-4 py-2 text-white enabled:hover:bg-purple-600 disabled:cursor-not-allowed disabled:bg-neutral-800 disabled:text-neutral-500"
+                  >
+                    {isImporting ? 'Importing…' : 'Confirm New Import'}
+                  </button>
+
+                  {importMessage && (
+                    <p
+                      role="status"
+                      aria-live="polite"
+                      className={`mt-3 rounded-lg border p-3 text-sm ${
+                        importMessage.startsWith('Import failed:')
+                          ? 'border-red-900 bg-red-950/20 text-red-200'
+                          : importMessage.startsWith('Successfully imported')
+                            ? 'border-emerald-900 bg-emerald-950/15 text-emerald-300'
+                            : 'border-purple-900 bg-purple-950/15 text-purple-200'
+                      }`}
+                    >
+                      {importMessage}
+                    </p>
+                  )}
+                </>
               )}
 
               {importMode ===

@@ -26,7 +26,7 @@ import {
   type PlayerSummaryRow,
   type TrackingCoverage,
 } from '@/lib/ballchasingImport'
-import { buildOpponentIdentityIndex, normalizeOpponentName } from '@/lib/opponents'
+import { buildOpponentIdentityIndex, resolveImportOpponent } from '@/lib/opponents'
 import { resolveCompetitionImportRoster } from '@/lib/competitionImportRoster'
 import { competitionEntryOptions, scheduledFixturesForEntry } from '@/lib/competitionImportContext'
 import type { CompetitionPhase } from '@/lib/competitionPhase'
@@ -1409,7 +1409,7 @@ export default function Admin() {
   async function analyzeExistingSeries(
     parsedGames = games,
     parsedStats = playerStats,
-    opponent = importOpponent,
+    opponent = opponentResolution.canonicalName ?? importOpponent,
     date = importDate
   ) {
     if (
@@ -1749,6 +1749,7 @@ export default function Admin() {
     importDate,
     importCompetitionId,
     importEntryId,
+    importScheduledMatchId,
     importValidation.errors.length,
   ])
 
@@ -2560,22 +2561,11 @@ export default function Admin() {
         team,
       } = await getImportContext()
 
-      const normalizedOpponent = normalizeOpponentName(importOpponent)
-      const [{ data: opponentRows, error: opponentError }, { data: aliasRows, error: aliasError }] = await Promise.all([
-        supabase.from('opponents').select('opponent_id, canonical_name').eq('normalized_name', normalizedOpponent),
-        supabase.from('opponent_aliases').select('opponent_id, alias').eq('normalized_alias', normalizedOpponent),
-      ])
-      if (opponentError || aliasError) throw opponentError ?? aliasError
-      const opponentIds = [...new Set([
-        ...(opponentRows ?? []).map((row) => Number(row.opponent_id)),
-        ...(aliasRows ?? []).map((row) => Number(row.opponent_id)),
-      ])]
-      if (opponentIds.length !== 1) {
-        throw new Error(opponentIds.length
-          ? 'Opponent identity is ambiguous. Resolve it in League Directory before import.'
-          : 'Opponent identity is unresolved. Resolve it in League Directory before import.')
+      if (opponentResolution.errors.length || !opponentResolution.opponentId || !opponentResolution.canonicalName) {
+        throw new Error(opponentResolution.errors[0] ?? 'Opponent identity is not ready for import.')
       }
-      const opponentId = opponentIds[0]
+      const opponentId = opponentResolution.opponentId
+      const canonicalOpponentName = opponentResolution.canonicalName
 
       const playoffTarget = importSeriesType === 'playoffs'
         ? playoffImportTargets.find((row) => String(row.playoff_match_id) === importPlayoffMatchId)
@@ -2649,7 +2639,7 @@ export default function Admin() {
             team.id,
 
           opponent_name:
-            importOpponent,
+            canonicalOpponentName,
 
           opponent_id:
             opponentId,
@@ -2669,7 +2659,7 @@ export default function Admin() {
             importDate,
 
           notes:
-            `Imported via canonical Ballchasing players-games.csv workflow — ${importOpponent}`,
+            `Imported via canonical Ballchasing players-games.csv workflow — ${canonicalOpponentName}${canonicalOpponentName !== importOpponent.trim() ? ` (CSV: ${importOpponent.trim()})` : ''}`,
         })
         .select()
         .single()
@@ -2705,7 +2695,7 @@ export default function Admin() {
                 series.series_id,
 
               opponent_name:
-                importOpponent,
+                canonicalOpponentName,
 
               flop_reset_score:
                 game.ourGoals,
@@ -3774,11 +3764,12 @@ export default function Admin() {
         snapshotName: selectedScheduledOpponent?.canonical_name ?? selectedScheduledMatch.opponent_name,
       })
     : null
-  const selectedFixtureOpponentMatches = !selectedScheduledMatch || (
-    importedOpponentIdentity && selectedFixtureOpponentIdentity
-      ? importedOpponentIdentity.opponentId === selectedFixtureOpponentIdentity.opponentId
-      : normalizeOpponentName(importOpponent) === normalizeOpponentName(selectedScheduledOpponent?.canonical_name ?? selectedScheduledMatch.opponent_name)
-  )
+  const opponentResolution = resolveImportOpponent({
+    csvOpponentName: importOpponent,
+    csvIdentity: importedOpponentIdentity,
+    fixtureLinked: Boolean(selectedScheduledMatch),
+    fixtureIdentity: selectedFixtureOpponentIdentity,
+  })
   const fixtureDateWarning = selectedScheduledMatch && importDate !== selectedScheduledMatch.match_date
     ? ['Selected fixture date differs from the imported series date. The linked fixture will be preserved.']
     : []
@@ -3787,14 +3778,13 @@ export default function Admin() {
     ...importValidation.errors,
     ...(!selectedImportCompetition ? ['Unknown competition.'] : []),
     ...(!targetRegistration ? ['Selected team is not registered in the competition format.'] : []),
-    ...(!importOpponent.trim() ? ['Opponent identity is missing.'] : []),
+    ...opponentResolution.errors,
     ...(!importDate ? ['Series date is missing.'] : []),
     ...(!bestOfValid ? ['A valid odd best-of value is required.'] : []),
     ...(importSeriesType === 'playoffs' && !selectedPlayoffTarget ? ['A playoff match is required for a playoff import.'] : []),
-    ...(!selectedFixtureOpponentMatches ? ['Selected fixture opponent does not match the CSV opponent.'] : []),
     ...(selectedScheduledMatch && Number(selectedScheduledMatch.best_of) !== intendedBestOf ? ['Selected fixture best-of does not match the import.'] : []),
   ] : [...playersSummaryErrors, ...importValidation.errors]
-  const previewWarnings = [...importValidation.warnings, ...fixtureDateWarning]
+  const previewWarnings = [...importValidation.warnings, ...fixtureDateWarning, ...opponentResolution.warnings]
   const safeToImport = games.length > 0 && previewErrors.length === 0 &&
     (importMode === 'new' || importMode === 'backfill')
   const rebuildReady = !rebuildHealth.loading && !rebuildHealth.error &&
@@ -4384,7 +4374,8 @@ export default function Admin() {
                   {importSeriesType === 'playoffs' && <div><dt className="text-neutral-500">Bracket Match</dt><dd className="font-semibold text-white">{selectedPlayoffTarget ? `${selectedPlayoffTarget.playoff_brackets?.tier ?? 'Tier ?'} · ${selectedPlayoffTarget.round_name}` : '—'}</dd></div>}
                   {importSeriesType === 'regular_season' && <div><dt className="text-neutral-500">Scheduled Match</dt><dd className="font-semibold text-white">{selectedScheduledMatch ? `#${selectedScheduledMatch.scheduled_id}` : 'Not linked'}</dd></div>}
                   <div><dt className="text-neutral-500">Team</dt><dd className="font-semibold text-white">{importTeam}</dd></div>
-                  <div><dt className="text-neutral-500">Opponent</dt><dd className="font-semibold text-white">{importOpponent || '—'}</dd></div>
+                  <div><dt className="text-neutral-500">CSV Opponent</dt><dd className="font-semibold text-white">{importOpponent || '—'}</dd></div>
+                  <div><dt className="text-neutral-500">Canonical Opponent</dt><dd className="font-semibold text-white">{opponentResolution.canonicalName || '—'}</dd></div>
                   <div><dt className="text-neutral-500">Date</dt><dd className="font-semibold text-white">{importDate ? formatPublicDate(importDate) : '—'}</dd></div>
                   <div><dt className="text-neutral-500">Games / Best Of</dt><dd className="font-semibold text-white">{games.length} / {bestOfValid ? intendedBestOf : '—'}</dd></div>
                   <div><dt className="text-neutral-500">Expected FR player rows</dt><dd className="font-semibold text-white">{importValidation.expectedFrRows}</dd></div>

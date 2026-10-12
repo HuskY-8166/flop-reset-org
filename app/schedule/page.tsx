@@ -8,15 +8,17 @@ import { ScheduledMatchCard } from '@/components/ScheduledMatchCard'
 export const dynamic = 'force-dynamic'
 
 export default async function Schedule() {
-  const [{ data: allUpcoming, error }, { data: history }, { data: competitions }, { data: seasons }] = await Promise.all([
-    supabase.from('scheduled_matches').select('scheduled_id, competition_id, opponent_name, match_date, scheduled_local_time, match_time, timezone, best_of, competition_phase, stage_label, tier, source_url, notes, competitions ( name ), teams ( id, name, format )').eq('status', 'scheduled').order('match_date', { ascending: true }).order('scheduled_local_time', { ascending: true }),
+  const [{ data: allUpcoming, error }, { data: history }, { data: competitions }, { data: seasons }, { data: entries }] = await Promise.all([
+    supabase.from('scheduled_matches').select('scheduled_id, competition_id, competition_entry_id, opponent_name, match_date, scheduled_local_time, match_time, timezone, best_of, competition_phase, stage_label, tier, source_url, notes, competitions ( name ), teams ( id, name, format )').eq('status', 'scheduled').order('match_date', { ascending: true }).order('scheduled_local_time', { ascending: true }),
     supabase.from('series').select('series_id, competition_id, opponent_name, series_date, notes, teams ( name, format ), matches ( * )').order('series_date', { ascending: false }),
     supabase.from('competitions').select('*'),
     supabase.from('public_competition_seasons').select('*'),
+    supabase.from('public_competition_entries').select('entry_id, display_name_snapshot'),
   ])
   const operationalSeason = selectOperationalSeason(groupCompetitionsBySeason(competitions ?? [], seasons ?? []))
   const operationalIds = operationalCompetitionIds(operationalSeason)
   const upcoming = rowsForCompetitionIds(allUpcoming ?? [], operationalIds)
+  const entryNames = new Map((entries ?? []).map((entry: any) => [Number(entry.entry_id), String(entry.display_name_snapshot)]))
 
   return (
     <main className="px-4 py-10 md:px-8 md:py-14 max-w-6xl mx-auto">
@@ -27,7 +29,7 @@ export default async function Schedule() {
         {(!upcoming || upcoming.length === 0) && (
           <div className="rounded-2xl border border-purple-900/70 bg-purple-950/10 p-6"><div className="text-xs font-black uppercase tracking-[.18em] text-purple-300">Opening week watch</div><div className="mt-2 text-xl font-black text-white">Fixtures have not been generated</div><p className="mt-2 text-sm text-neutral-500">Both Rivalry competition feeds currently report zero matches. Opponents and dates will appear here only after verified source publication.</p></div>
         )}
-        {upcoming?.map((m) => <ScheduledMatchCard key={m.scheduled_id} match={m as any} featured={m === upcoming[0]} />)}
+        {upcoming?.map((m: any) => <ScheduledMatchCard key={m.scheduled_id} match={m} teamDisplayName={entryNames.get(Number(m.competition_entry_id))} featured={m === upcoming[0]} />)}
       </div>
 
       <details className="group">

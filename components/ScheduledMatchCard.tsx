@@ -20,10 +20,11 @@ type ScheduledMatchCardProps = {
     competitions?: { name?: string | null } | null
   }
   featured?: boolean
+  teamDisplayName?: string | null
 }
 
-export function ScheduledMatchCard({ match, featured = false }: ScheduledMatchCardProps) {
-  const teamName = match.teams?.name ?? 'Flop Reset'
+export function ScheduledMatchCard({ match, featured = false, teamDisplayName }: ScheduledMatchCardProps) {
+  const teamName = teamDisplayName?.trim() || match.teams?.name || 'Flop Reset'
   const sourceUrl = /^https:\/\//i.test(match.source_url ?? '') ? match.source_url : null
   return <article className={`min-w-0 rounded-2xl border p-5 ${featured ? 'border-purple-700 bg-purple-950/20 md:p-7' : 'border-neutral-800 bg-[#111]'}`}>
     <div className="flex min-w-0 flex-wrap items-center gap-2 text-[11px] font-black uppercase tracking-[.14em] text-purple-300">

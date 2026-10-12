@@ -16,10 +16,10 @@ const teams = [
   { id: 2, name: 'Frantic', format: '3v3', active: false, players: [{ name: 'Waycey' }] },
 ]
 const entries = [
-  { entry_id: 161, competition_id: 3, fr_team_id: 5 },
-  { entry_id: 162, competition_id: 4, fr_team_id: 1 },
-  { entry_id: 163, competition_id: 4, fr_team_id: 3 },
-  { entry_id: 164, competition_id: 4, fr_team_id: 6 },
+  { entry_id: 161, competition_id: 3, fr_team_id: 5, display_name_snapshot: 'FRCS' },
+  { entry_id: 162, competition_id: 4, fr_team_id: 1, display_name_snapshot: 'Fracture' },
+  { entry_id: 163, competition_id: 4, fr_team_id: 3, display_name_snapshot: 'Frameshift' },
+  { entry_id: 164, competition_id: 4, fr_team_id: 6, display_name_snapshot: 'Future' },
 ]
 const fallRoster = [
   { roster_member_id: 900, entry_id: 163, display_name_snapshot: 'Verified Fall Player', role: 'captain', is_current: true },
@@ -28,6 +28,7 @@ const fallRoster = [
 const current = buildCurrentRosterContexts({ teams, seasons: fallSeason, competitions, entries, members: fallRoster })
 assert.deepEqual(current.get(1)?.members, [], 'historical global memberships never fill an empty Fall roster')
 assert.deepEqual(current.get(5)?.members, [], '2v2 current roster stays empty without a Fall snapshot')
+assert.equal(current.get(5)?.displayName, 'FRCS', 'team 5 uses its Fall competition identity without renaming canonical history')
 assert.deepEqual(current.get(3)?.members.map((member) => member.display_name_snapshot), ['Verified Fall Player'], 'current cards display only the Fall competition roster')
 assert.deepEqual(current.get(6)?.members, [], 'Future remains empty until a Fall roster is inserted')
 assert.equal(current.has(2), false, 'inactive Frantic is excluded from current roster contexts')
@@ -41,5 +42,8 @@ assert.match(
   /public_competition_roster_members/,
   'historical Summer archive continues to use competition-specific roster snapshots',
 )
+const teamPageSource = readFileSync(fileURLToPath(new URL('../app/teams/[name]/page.tsx', import.meta.url)), 'utf8')
+assert.match(teamPageSource, /title=\{currentDisplayName\}/, 'current team pages render the competition-entry identity')
+assert.match(teamPageSource, /teamDisplayName=\{currentDisplayName\}/, 'current team fixtures render the competition-entry identity')
 
 console.log('Current-season roster isolation tests passed.')

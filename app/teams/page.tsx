@@ -24,7 +24,7 @@ export default async function Teams() {
     `).order('name'),
     supabase.from('public_competition_seasons').select('season_id, status, season_year, starts_at'),
     supabase.from('competitions').select('id, season_id, format, status, current_stage, start_date'),
-    supabase.from('public_competition_entries').select('entry_id, competition_id, fr_team_id, registration_status, status'),
+    supabase.from('public_competition_entries').select('entry_id, competition_id, fr_team_id, display_name_snapshot, registration_status, status'),
     supabase.from('public_competition_roster_members').select('roster_member_id, entry_id, display_name_snapshot, role, is_current, status, league_player_slug, league_player_display_name'),
   ])
 
@@ -47,7 +47,9 @@ export default async function Teams() {
         {list.length === 0 && <div className="col-span-full rounded-xl border border-neutral-800 bg-[#111] p-5 text-sm text-neutral-500">No teams are registered in this format yet.</div>}
         {list.map((team) => {
           const brand = brandingForTeam(team)
-          const roster = currentRosters.get(Number(team.id))?.members ?? []
+          const currentContext = currentRosters.get(Number(team.id))
+          const currentName = currentContext?.displayName || brand.name
+          const roster = currentContext?.members ?? []
           const captain = roster.find((member) => member.role === 'captain')
           return (
           <div
@@ -58,7 +60,7 @@ export default async function Teams() {
           >
             <div className="flex items-baseline justify-between mb-1">
 <h2 className="text-2xl font-bold">
-                <a href={teamHref(team)} className="hover:underline">{brand.name}</a>
+                <a href={teamHref(team)} className="hover:underline">{currentName}</a>
               </h2>              <span className="text-xs uppercase tracking-wide text-neutral-400">{team.format}</span>
             </div>
             {captain && <p className="text-sm text-neutral-400 mb-4">Captain: {captain.display_name_snapshot}</p>}

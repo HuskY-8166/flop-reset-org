@@ -25,6 +25,7 @@ export type CurrentRosterEntry = {
   entry_id: number | string
   competition_id: number | string
   fr_team_id?: number | string | null
+  display_name_snapshot?: string | null
   registration_status?: string | null
   status?: string | null
 }
@@ -43,6 +44,7 @@ export type CurrentRosterMember = {
 export type CurrentRosterContext = {
   competitionId: number | null
   entryId: number | null
+  displayName: string | null
   members: CurrentRosterMember[]
 }
 
@@ -142,6 +144,7 @@ export function buildCurrentRosterContexts({
     contexts.set(teamId, {
       competitionId,
       entryId,
+      displayName: entry?.display_name_snapshot?.trim() || null,
       members: rosterForCompetitionEntry(entryId, members),
     })
   }
